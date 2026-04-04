@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 知识管理系统 — RAG + Neo4j</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部 Header -->
+        <header>
+            <div class="header-row">
+                <h1>📚 知识管理系统</h1>
+                <span class="header-subtitle">本地 RAG + Neo4j 知识图谱</span>
+            </div>
+            <nav class="tabs">
+                <button class="tab active" data-tab="chat">💬 对话检索</button>
+                <button class="tab" data-tab="search">🔍 混合搜索</button>
+                <button class="tab" data-tab="graph">🕸️ 图谱查询</button>
+                <button class="tab" data-tab="upload">📁 文档管理</button>
+            </nav>
+        </header>
+
+        <!-- ========== 对话检索 ========== -->
+        <section id="chat-panel" class="panel active">
+            <div id="chat-messages" class="chat-messages">
+                <div class="welcome-hint">
+                    <p>👋 你好！我是知识助手，可以基于你的文档库回答问题。</p>
+                    <p>试试问我：<em>"什么是RAG？"、"Neo4j怎么用？"</em></p>
+                </div>
+            </div>
+            <div class="chat-input">
+                <textarea id="chat-input" placeholder="输入你的问题…" rows="2"></textarea>
+                <button id="chat-send" class="btn-primary">发送</button>
+                <button id="chat-clear" class="btn-secondary" title="清空对话">🗑️</button>
+            </div>
+        </section>
+
+        <!-- ========== 混合搜索 ========== -->
+        <section id="search-panel" class="panel">
+            <div class="search-controls">
+                <div class="search-bar">
+                    <input type="text" id="search-query" placeholder="输入搜索关键词…">
+                    <button id="search-btn" class="btn-primary">🔍 搜索</button>
+                </div>
+                <div class="weights">
+                    <label>
+                        <span class="weight-label">向量权重</span>
+                        <input type="range" id="vec-weight" min="0" max="1" step="0.1" value="0.5">
+                        <span class="weight-val" id="vec-val">0.5</span>
+                    </label>
+                    <label>
+                        <span class="weight-label">图谱权重</span>
+                        <input type="range" id="graph-weight" min="0" max="1" step="0.1" value="0.3">
+                        <span class="weight-val" id="graph-val">0.3</span>
+                    </label>
+                    <label>
+                        <span class="weight-label">关键词权重</span>
+                        <input type="range" id="kw-weight" min="0" max="1" step="0.1" value="0.2">
+                        <span class="weight-val" id="kw-val">0.2</span>
+                    </label>
+                </div>
+            </div>
+            <div id="search-results" class="results"></div>
+        </section>
+
+        <!-- ========== 图谱查询 ========== -->
+        <section id="graph-panel" class="panel">
+            <div class="graph-controls">
+                <input type="text" id="graph-keyword" placeholder="图谱搜索关键词…">
+                <button id="graph-search-btn" class="btn-primary">搜索图谱</button>
+                <button id="graph-stats-btn" class="btn-secondary">📊 统计信息</button>
+            </div>
+
+            <!-- 文档图谱区域 -->
+            <div class="graph-section">
+                <h3>📄 文档图谱</h3>
+                <div id="graph-doc-view" class="graph-doc-view">
+                    <p class="hint-text">搜索关键词后，将展示相关文档的知识图谱。</p>
+                </div>
+            </div>
+
+            <!-- 相似文档 -->
+            <div class="graph-section">
+                <h3>🔗 相似文档</h3>
+                <div id="graph-similar" class="results">
+                    <p class="hint-text">搜索后将展示相似文档。</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========== 文档管理 ========== -->
+        <section id="upload-panel" class="panel">
+            <!-- 上传区域 -->
+            <div class="upload-area">
+                <h3>📤 上传文档</h3>
+                <div class="upload-drop-zone" id="drop-zone">
+                    <p>拖拽文件到此处，或点击选择</p>
+                    <input type="file" id="file-input" accept=".pdf,.html,.htm,.md,.txt,.mdx">
+                    <button id="upload-btn" class="btn-primary">上传入库</button>
+                </div>
+                <div id="upload-status" class="status-msg"></div>
+            </div>
+
+            <!-- URL入库 -->
+            <div class="url-ingest">
+                <h3>🌐 URL 入库</h3>
+                <div class="url-input-row">
+                    <input type="text" id="url-input" placeholder="输入 URL，如 https://mp.weixin.qq.com/s/...">
+                    <button id="url-ingest-btn" class="btn-primary">入库</button>
+                </div>
+                <div id="url-status" class="status-msg"></div>
+            </div>
+
+            <!-- 系统统计 -->
+            <div class="stats-section">
+                <h3>📊 系统统计</h3>
+                <button id="stats-btn" class="btn-secondary">刷新统计</button>
+                <div id="stats-results" class="stats-grid"></div>
+            </div>
+
+            <!-- 文档列表 -->
+            <div class="doc-list-section">
+                <h3>📋 最近入库文档</h3>
+                <div id="doc-list" class="results">
+                    <p class="hint-text">点击"刷新统计"查看系统信息。</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer class="footer">
+        <span>知识管理系统 v1.0</span>
+        <span>|</span>
+        <span>本地 RAG + Neo4j 知识图谱</span>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
