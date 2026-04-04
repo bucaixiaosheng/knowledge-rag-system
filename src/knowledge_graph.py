@@ -64,14 +64,66 @@ class KnowledgeGraph:
             return result.single()["exists"]
 
     def delete_document(self, doc_id: str) -> None:
-        """删除文档及其所有关系"""
-        query = """
-        MATCH (d:Document {doc_id: $doc_id})
-        DETACH DELETE d
-        """
+        """删除文档及其所有Chunk、关系，并清理孤立的AnchorKeyword"""
         with self.driver.session() as session:
-            session.run(query, doc_id=doc_id)
-        logger.info(f"图谱删除文档: {doc_id}")
+            # Step 1: 收集该文档关联的所有chunk_id
+            chunk_ids_result = session.run(
+                "MATCH (c:Chunk {doc_id: $doc_id}) RETURN c.chunk_id AS chunk_id",
+                doc_id=doc_id,
+            )
+            chunk_ids = [r["chunk_id"] for r in chunk_ids_result]
+            logger.info(f"文档 {doc_id} 关联 {len(chunk_ids)} 个Chunk")
+
+            # Step 2: 清理孤立的AnchorKeyword
+            # 对每个被删chunk关联的AnchorKeyword，移除其chunk_ids和doc_ids中的引用
+            if chunk_ids:
+                # 找到所有与这些chunk关联的AnchorKeyword
+                for cid in chunk_ids:
+                    session.run(
+                        """
+                        MATCH (ak:AnchorKeyword)<-[:HAS_ANCHOR]-(c:Chunk {chunk_id: $chunk_id})
+                        SET ak.chunk_ids = [x IN ak.chunk_ids WHERE x <> $chunk_id],
+                            ak.doc_ids = CASE WHEN $doc_id IN ak.doc_ids
+                                              THEN [x IN ak.doc_ids WHERE x <> $doc_id]
+                                              ELSE ak.doc_ids END,
+                            ak.occurrence_count = CASE WHEN ak.occurrence_count > 0
+                                                       THEN ak.occurrence_count - 1
+                                                       ELSE 0 END
+                        """,
+                        chunk_id=cid,
+                        doc_id=doc_id,
+                    )
+
+                # 删除所有chunk_ids为空列表的孤立AnchorKeyword
+                session.run("""
+                    MATCH (ak:AnchorKeyword)
+                    WHERE ak.chunk_ids = [] OR size(ak.chunk_ids) = 0
+                    DETACH DELETE ak
+                """")
+                logger.info(f"已清理孤立AnchorKeyword")
+
+            # Step 3: 删除所有关联Chunk节点（DETACH DELETE会同时删除Chunk的关系）
+            session.run(
+                "MATCH (c:Chunk {doc_id: $doc_id}) DETACH DELETE c",
+                doc_id=doc_id,
+            )
+            logger.info(f"已删除文档 {doc_id} 的所有Chunk节点")
+
+            # Step 4: 删除Document节点
+            session.run(
+                "MATCH (d:Document {doc_id: $doc_id}) DETACH DELETE d",
+                doc_id=doc_id,
+            )
+            logger.info(f"已删除Document节点: {doc_id}")
+
+            # Step 5: 清理可能残留的孤立Tag节点
+            session.run("""
+                MATCH (t:Tag)
+                WHERE NOT (t)<--()
+                DETACH DELETE t
+            """")
+
+        logger.info(f"图谱级联删除完成: {doc_id} (含 {len(chunk_ids)} 个Chunk)")
 
     # ================================================================
     # 实体/概念操作

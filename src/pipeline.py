@@ -269,8 +269,31 @@ class IngestPipeline:
         query_embedding = self.emb_engine.embed_query(query)
         return self.kg.search_by_semantic_query(query, query_embedding, top_k)
 
-    def delete_document(self, doc_id: str) -> None:
-        """删除文档"""
-        self.vector_store.delete_by_doc(doc_id)
-        self.kg.delete_document(doc_id)
-        logger.info(f"文档已删除: {doc_id}")
+    def delete_document(self, doc_id: str) -> dict:
+        """删除文档（级联清理：向量库 + 知识图谱）"""
+        deleted_chunks = 0
+        deleted_doc = False
+
+        # Step 1: 先删除ChromaDB中的向量数据
+        try:
+            self.vector_store.delete_by_doc(doc_id)
+            deleted_chunks = True
+        except Exception as e:
+            logger.warning(f"向量库删除失败: {e}")
+
+        # Step 2: 再删除Neo4j中的图谱数据（Chunk + AnchorKeyword + Document）
+        try:
+            self.kg.delete_document(doc_id)
+            deleted_doc = True
+        except Exception as e:
+            logger.error(f"图谱删除失败: {e}")
+            raise
+
+        result = {
+            "doc_id": doc_id,
+            "status": "deleted",
+            "vector_store_cleaned": deleted_chunks,
+            "graph_cleaned": deleted_doc,
+        }
+        logger.info(f"文档已删除: {result}")
+        return result

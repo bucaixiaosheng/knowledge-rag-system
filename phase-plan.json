@@ -1,0 +1,150 @@
+{
+  "phase_plan": {
+    "status": "coding",
+    "version": "1.1",
+    "created_at": "2026-04-04T15:11:00+08:00",
+    "task_id": "knowledge_rag_v1.1",
+    "description": "知识RAG系统完善：修复级联删除、新增CLI工具、端到端测试、编写使用说明书",
+    "project_path": "~/knowledge-rag-system/",
+    "phases": [
+      {
+        "phase_id": "phase_1",
+        "name": "修复delete_document()级联删除",
+        "description": "修复knowledge_graph.py的delete_document()方法，使其在删除Document节点时级联删除关联的Chunk节点和AnchorKeyword节点，并清理孤立节点",
+        "tasks": [
+          {
+            "task_id": "task_1_1",
+            "name": "修复KnowledgeGraph.delete_document()级联删除Chunk",
+            "description": "修改knowledge_graph.py中的delete_document()方法：先找到Document关联的所有Chunk节点，DETACH DELETE所有Chunk，再DETACH DELETE Document。同时清理孤立的AnchorKeyword节点（chunk_ids或doc_ids为空或只包含被删文档ID的）",
+            "deliverables": [
+              "修改后的src/knowledge_graph.py，delete_document()方法实现完整级联删除",
+              "删除后验证：MATCH (c:Chunk) WHERE c.doc_id = $deleted_doc_id RETURN count(c) 应为0",
+              "孤立AnchorKeyword清理：删除后没有无关联的AnchorKeyword残留"
+            ],
+            "acceptance_criteria": [
+              "删除一个文档后，该文档关联的所有Chunk节点不存在",
+              "删除后，只引用被删文档的AnchorKeyword节点被清理",
+              "被其他文档共用的AnchorKeyword节点保留（doc_ids仍包含其他doc_id）",
+              "重新入库被删文档不报ConstraintValidationError"
+            ],
+            "estimated_time_minutes": 8,
+            "files_to_modify": ["src/knowledge_graph.py"],
+            "status": "pending",
+            "sprints": []
+          }
+        ],
+        "estimated_time_minutes": 8,
+        "status": "pending",
+        "dependencies": []
+      },
+      {
+        "phase_id": "phase_2",
+        "name": "创建CLI命令行工具",
+        "description": "创建cli.py命令行工具，支持文件入库、URL入库（含微信文章）、搜索、删除、统计等操作",
+        "tasks": [
+          {
+            "task_id": "task_2_1",
+            "name": "创建cli.py CLI命令行工具",
+            "description": "在项目根目录创建cli.py，使用argparse实现以下子命令：\n1. ingest --file /path/to/doc.md：本地文件入库\n2. ingest --url https://...：URL入库\n3. ingest --wechat-url https://mp.weixin.qq.com/...：微信文章入库\n4. search \"查询词\"：搜索知识库\n5. delete --doc-id xxx：删除文档\n6. stats：查看系统统计\n7. list-docs：列出所有文档",
+            "deliverables": [
+              "cli.py命令行工具文件",
+              "支持所有7个子命令",
+              "带--verbose/-v调试模式",
+              "带--tags自定义标签",
+              "优雅的错误处理和用户友好输出"
+            ],
+            "acceptance_criteria": [
+              "python cli.py ingest --file /path/to/test.md 成功入库",
+              "python cli.py ingest --url https://example.com 成功入库",
+              "python cli.py ingest --wechat-url https://mp.weixin.qq.com/xxx 成功入库",
+              "python cli.py search \"测试查询\" 返回搜索结果",
+              "python cli.py delete --doc-id xxx 成功删除且级联清理",
+              "python cli.py stats 返回系统统计信息",
+              "python cli.py list-docs 返回文档列表",
+              "所有命令有--help说明"
+            ],
+            "estimated_time_minutes": 10,
+            "files_to_modify": ["cli.py（新建）"],
+            "status": "pending",
+            "sprints": []
+          }
+        ],
+        "estimated_time_minutes": 10,
+        "status": "pending",
+        "dependencies": ["phase_1"]
+      },
+      {
+        "phase_id": "phase_3",
+        "name": "端到端测试",
+        "description": "完成修复和CLI后，执行完整端到端测试：入库、删除、重入库、搜索、RAG对话",
+        "tasks": [
+          {
+            "task_id": "task_3_1",
+            "name": "端到端测试：入库微信文章+本地MD+删除测试+查询测试+RAG对话",
+            "description": "执行完整端到端测试流程：\n1. 入库微信文章 https://mp.weixin.qq.com/s/rfxvjsKThpINZGt3TVtN2g\n2. 入库本地MD文件（~/knowledge-rag-system/docs/ 下的markdown文件）\n3. 删除测试：删除一个文档，验证级联清理，再重新入库不报错\n4. 查询测试：搜\"微软TTS\"/\"AI自动科研\"/\"知识图谱Neo4j\"\n5. RAG对话测试：通过API问\"推荐一些开源AI语音合成工具\"",
+            "deliverables": [
+              "测试执行结果记录（日志/截图）",
+              "每一步的通过/失败状态",
+              "发现的问题和修复方案"
+            ],
+            "acceptance_criteria": [
+              "微信文章成功入库（status=success）",
+              "本地MD文件成功入库",
+              "删除文档后级联清理成功（无残留Chunk/孤立AnchorKeyword）",
+              "重新入库被删文档不报错",
+              "三个查询词均返回相关结果",
+              "RAG对话返回有意义的回答"
+            ],
+            "estimated_time_minutes": 10,
+            "files_to_modify": [],
+            "status": "pending",
+            "sprints": []
+          }
+        ],
+        "estimated_time_minutes": 10,
+        "status": "pending",
+        "dependencies": ["phase_1", "phase_2"]
+      },
+      {
+        "phase_id": "phase_4",
+        "name": "编写详细使用说明书",
+        "description": "编写USER_GUIDE.md，面向野哥，中文编写，包含完整的使用指南",
+        "tasks": [
+          {
+            "task_id": "task_4_1",
+            "name": "编写USER_GUIDE.md使用说明书",
+            "description": "在docs/目录创建USER_GUIDE.md，内容包括：\n1. 系统简介\n2. 环境启动（Docker启动Neo4j+ChromaDB、启动API服务）\n3. 入库操作（API方式、CLI方式、批量入库）\n4. 查询操作（混合搜索、向量搜索、图谱搜索）\n5. RAG对话操作\n6. 管理操作（删除文档、查看统计、列表文档）\n7. 常用命令速查表\n8. 故障排查\n9. 配置说明（.env文件）",
+            "deliverables": [
+              "docs/USER_GUIDE.md完整使用说明书"
+            ],
+            "acceptance_criteria": [
+              "文档覆盖所有操作场景",
+              "包含curl命令示例（API操作）",
+              "包含CLI命令示例",
+              "包含Docker启动命令",
+              "包含故障排查FAQ",
+              "中文编写、格式清晰、面向非技术用户友好"
+            ],
+            "estimated_time_minutes": 10,
+            "files_to_modify": ["docs/USER_GUIDE.md（新建）"],
+            "status": "pending",
+            "sprints": []
+          }
+        ],
+        "estimated_time_minutes": 10,
+        "status": "pending",
+        "dependencies": ["phase_1", "phase_2", "phase_3"]
+      }
+    ],
+    "total_phases": 4,
+    "total_tasks": 4,
+    "estimated_total_minutes": 38,
+    "notes": [
+      "Phase 1（级联删除修复）是基础，Phase 2（CLI）依赖Phase 1",
+      "Phase 3（测试）依赖Phase 1和Phase 2完成后执行",
+      "Phase 4（文档）依赖Phase 3验证通过后编写，确保文档中的命令和流程都已验证",
+      "所有phase在~/knowledge-rag-system/目录下工作",
+      "项目已有虚拟环境venv，所有Python命令需在venv中执行"
+    ]
+  }
+}
