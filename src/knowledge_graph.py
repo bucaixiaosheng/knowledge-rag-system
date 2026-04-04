@@ -99,7 +99,7 @@ class KnowledgeGraph:
                     MATCH (ak:AnchorKeyword)
                     WHERE ak.chunk_ids = [] OR size(ak.chunk_ids) = 0
                     DETACH DELETE ak
-                """")
+                """)
                 logger.info(f"已清理孤立AnchorKeyword")
 
             # Step 3: 删除所有关联Chunk节点（DETACH DELETE会同时删除Chunk的关系）
@@ -121,7 +121,7 @@ class KnowledgeGraph:
                 MATCH (t:Tag)
                 WHERE NOT (t)<--()
                 DETACH DELETE t
-            """")
+            """)
 
         logger.info(f"图谱级联删除完成: {doc_id} (含 {len(chunk_ids)} 个Chunk)")
 

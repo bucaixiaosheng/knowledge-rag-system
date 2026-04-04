@@ -187,11 +187,15 @@ def cmd_list_docs(args):
         print(f"{'序号':<4} {'Doc ID':<20} {'标题':<30} {'领域':<12} {'Chunk数':<8} {'类型'}")
         print("-" * 100)
         for i, r in enumerate(results, 1):
-            title = (r.get("title") or "N/A")[:28]
-            doc_id = (r.get("doc_id") or "")[:18]
-            domain = (r.get("domain_tags") or r.get("primary_domain") or "")[:10]
-            chunks = r.get("chunk_count", 0)
-            doc_type = r.get("doc_type") or ""
+            title = str(r.get("title") or "N/A")[:28]
+            doc_id = str(r.get("doc_id") or "")[:18]
+            dt = r.get("domain_tags") or r.get("primary_domain") or ""
+            if isinstance(dt, list):
+                domain = ", ".join(dt)[:10]
+            else:
+                domain = str(dt)[:10]
+            chunks = r.get("chunk_count") or 0
+            doc_type = str(r.get("doc_type") or "")
             print(f"{i:<4} {doc_id:<20} {title:<30} {domain:<12} {chunks:<8} {doc_type}")
 
     except Exception as e:
