@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class EntityExtractor:
     """基于LLM的实体抽取"""
 
-    EXTRACTION_PROMPT = """你是一个专业的知识图谱构建助手。请从以下文本中提取实体、关系和丰富的锚关键词。
+    EXTRACTION_PROMPT_TEMPLATE = """你是一个专业的知识图谱构建助手。请从以下文本中提取实体、关系和丰富的锚关键词。
 
 要求：
 1. 实体类型包括：人物、组织、地点、技术/软件、概念/术语、产品、事件
@@ -23,14 +23,14 @@ class EntityExtractor:
    每个关键词要有importance权重（0.5-1.0）
 
 请以JSON格式返回：
-{
-  "entities": [{"name": "实体名", "entity_type": "实体类型", "description": "简短描述"}],
-  "relations": [{"source": "实体名1", "target": "实体名2", "relation_type": "关系类型", "properties": {}}],
-  "concepts": [{"name": "概念名", "description": "概念描述", "category": "分类"}],
-  "anchor_keywords": [{"keyword": "关键术语", "importance": 0.9}],
+{{
+  "entities": [{{"name": "实体名", "entity_type": "实体类型", "description": "简短描述"}}],
+  "relations": [{{"source": "实体名1", "target": "实体名2", "relation_type": "关系类型", "properties": {{}}}}],
+  "concepts": [{{"name": "概念名", "description": "概念描述", "category": "分类"}}],
+  "anchor_keywords": [{{"keyword": "关键术语", "importance": 0.9}}],
   "tags": ["标签1", "标签2"],
   "summary": "文本摘要（50字以内）"
-}
+}}
 只返回JSON，不要其他内容。
 
 文本：
@@ -58,7 +58,7 @@ class EntityExtractor:
                 summary: str
             }
         """
-        prompt = self.EXTRACTION_PROMPT.format(text=text[:3000])
+        prompt = self.EXTRACTION_PROMPT_TEMPLATE.format(text=text[:3000])
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,

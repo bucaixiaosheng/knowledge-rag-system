@@ -155,7 +155,7 @@ class IngestPipeline:
             "title": doc["title"],
             "source": doc["source"],
             "doc_type": doc["doc_type"],
-            "content_summary": extracted.get("summary", doc["content"][:200]),
+            "summary": extracted.get("summary", doc["content"][:200]),
             "created_at": now,
             "updated_at": now,
             "chunk_count": len(chunks),
