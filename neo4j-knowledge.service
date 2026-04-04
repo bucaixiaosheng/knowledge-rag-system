@@ -1,0 +1,16 @@
+[Unit]
+Description=Neo4j Knowledge Graph (Docker)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=tianye
+WorkingDirectory=/home/tianye/knowledge-rag-system
+
+ExecStart=/usr/bin/docker compose up -d neo4j chromadb
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target

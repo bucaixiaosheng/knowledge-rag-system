@@ -1,0 +1,24 @@
+[Unit]
+Description=Knowledge RAG System (FastAPI)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=tianye
+WorkingDirectory=/home/tianye/knowledge-rag-system
+Environment=PATH=/home/tianye/knowledge-rag-system/venv/bin:/usr/bin:/bin
+ExecStart=/home/tianye/knowledge-rag-system/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8100 --workers 2
+Restart=always
+RestartSec=10
+
+# 资源限制
+MemoryMax=2G
+CPUQuota=200%
+
+# 日志
+StandardOutput=append:/home/tianye/knowledge-rag-system/logs/api.log
+StandardError=append:/home/tianye/knowledge-rag-system/logs/api-error.log
+
+[Install]
+WantedBy=multi-user.target
