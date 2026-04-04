@@ -1,0 +1,589 @@
+{
+  "phase_plan": {
+    "status": "planning",
+    "version": "1.0",
+    "created_at": "2026-04-04T13:06:00+08:00",
+    "project": "knowledge-rag-system",
+    "description": "本地RAG + Neo4j知识管理系统",
+    "design_doc": "~/.openclaw/shared-projects/2026-04-04/knowledge.md",
+    "git_remote": "git@github.com:bucaixiaosheng/knowledge-rag-system.git",
+    "phases": [
+      {
+        "phase_id": "phase_1",
+        "name": "项目基础设施",
+        "description": "创建项目目录结构、配置文件、Docker编排、Neo4j初始化脚本，SSH初始化远程仓库",
+        "tasks": [
+          {
+            "task_id": "task_1_1",
+            "name": "创建项目目录结构和配置文件",
+            "description": "创建完整目录结构(src/api/scripts/web/docs/neo4j/chroma/logs)、.env、requirements.txt、README.md、.gitignore",
+            "deliverables": [
+              "目录结构: src/, api/routes/, api/models/, scripts/, web/, docs/{pdf,html,markdown}, neo4j/{data,logs,init,conf}, chroma/, logs/",
+              ".env 环境变量文件（含Neo4j/ChromaDB/Embedding/LLM/API配置）",
+              "requirements.txt（fastapi, chromadb, neo4j, sentence-transformers, openai等）",
+              "README.md 项目说明",
+              ".gitignore"
+            ],
+            "acceptance_criteria": [
+              "所有目录已创建",
+              ".env包含所有必要配置项（NEO4J_URI, CHROMA_HOST, LLM_API_KEY等）",
+              "requirements.txt包含设计文档中列出的所有依赖"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_1_2",
+            "name": "创建Docker Compose和Neo4j配置",
+            "description": "创建docker-compose.yml(Neo4j+ChromaDB)、neo4j/conf/neo4j.conf",
+            "deliverables": [
+              "docker-compose.yml: neo4j:5.26-community(7474/7687) + chromadb(8300)",
+              "neo4j/conf/neo4j.conf: 内存/网络/APOC配置"
+            ],
+            "acceptance_criteria": [
+              "docker compose config 验证通过",
+              "Neo4j端口7474/7687、ChromaDB端口8300配置正确",
+              "密码knowledge2026配置正确"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_1_3",
+            "name": "创建Neo4j初始化脚本(v2.0层级知识树)",
+            "description": "neo4j/init/01_schema.cypher：创建约束、索引、全文索引、KnowledgeRoot、预设Domain/SubDomain层级结构、示例数据",
+            "deliverables": [
+              "neo4j/init/01_schema.cypher: 包含约束(chunk_id/doc_id/entity_name/concept_name/tag_name)、索引、全文索引、KnowledgeRoot+7个Domain+11个SubDomain+示例数据+锚关键词+SEMANTICALLY_SIMILAR关系"
+            ],
+            "acceptance_criteria": [
+              "所有CREATE CONSTRAINT语句存在",
+              "7个Domain(Technology/Science/SocialScience/Arts/Business/Engineering/Medicine)已创建",
+              "11个SubDomain(AI/WebDev/DevOps/Security/Database/Finance/History/Psychology/Physics/Biology/Mathematics)已创建",
+              "示例文档和锚关键词节点已创建",
+              "SEMANTICALLY_SIMILAR关系示例已创建"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_1_4",
+            "name": "创建Python虚拟环境并首次Git提交",
+            "description": "创建venv、安装依赖、SSH初始化远程仓库、首次push",
+            "deliverables": [
+              "venv/ Python虚拟环境",
+              "首次git commit + push到git@github.com:bucaixiaosheng/knowledge-rag-system.git"
+            ],
+            "acceptance_criteria": [
+              "source venv/bin/activate && pip list 显示所有依赖",
+              "git remote -v 显示正确的远程仓库",
+              "git log 显示首次提交"
+            ],
+            "estimated_time_minutes": 10,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 28,
+        "status": "pending",
+        "parallel": false,
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_2",
+        "name": "核心基础模块",
+        "description": "实现config/document_loader/text_chunker/embedding四个独立基础模块，无相互依赖可并行",
+        "tasks": [
+          {
+            "task_id": "task_2_1",
+            "name": "实现配置管理模块",
+            "description": "src/__init__.py + src/config.py: 加载.env、定义所有配置常量(Neo4j/ChromaDB/Embedding/LLM/文档处理/API/路径)",
+            "deliverables": [
+              "src/__init__.py",
+              "src/config.py: load_dotenv + NEO4J_URI/USER/PASSWORD, CHROMA_HOST/PORT/COLLECTION, EMBEDDING_MODEL/DEVICE, LLM_BASE_URL/API_KEY/MODEL, CHUNK_SIZE/OVERLAP/MAX_WORKERS, API_HOST/PORT, PROJECT_ROOT/DOCS_DIR/LOGS_DIR"
+            ],
+            "acceptance_criteria": [
+              "python -c 'from src.config import NEO4J_URI' 不报错",
+              "所有环境变量有默认值"
+            ],
+            "estimated_time_minutes": 3,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_2_2",
+            "name": "实现文档加载模块",
+            "description": "src/document_loader.py: DocumentLoader类，支持PDF(PyMuPDF)/HTML(BeautifulSoup)/Markdown/TXT/URL加载，支持目录批量加载",
+            "deliverables": [
+              "src/document_loader.py: DocumentLoader类，load_file/load_url/load_directory方法，_load_pdf/_load_html/_load_markdown私有方法，SHA256生成doc_id"
+            ],
+            "acceptance_criteria": [
+              "可以加载PDF/HTML/MD/TXT文件",
+              "可以加载URL",
+              "可以批量加载目录",
+              "返回格式: {doc_id, title, content, doc_type, source, created_at, metadata}"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_2_3",
+            "name": "实现文本切块模块",
+            "description": "src/text_chunker.py: TextChunker类，递归切分(separator优先级)，支持chunk_size/chunk_overlap配置",
+            "deliverables": [
+              "src/text_chunker.py: TextChunker类，chunk_text/_recursive_split/_split_long_text方法，支持多级分隔符(段落/行/中英文标点/空格/字符级)"
+            ],
+            "acceptance_criteria": [
+              "输入文本被正确切分为多个chunk",
+              "每个chunk不超过chunk_size",
+              "chunk之间有overlap",
+              "返回格式: [{chunk_id, content, chunk_index, doc_id, metadata}]"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_2_4",
+            "name": "实现Embedding封装模块",
+            "description": "src/embedding.py: EmbeddingEngine单例类，封装sentence-transformers/all-MiniLM-L6-v2，提供embed_texts/embed_query方法",
+            "deliverables": [
+              "src/embedding.py: EmbeddingEngine单例类，embed_texts(批量)/embed_query(单条)方法，全局单例embedding_engine"
+            ],
+            "acceptance_criteria": [
+              "模型加载成功，输出维度384",
+              "embed_texts返回list[list[float]]",
+              "embed_query返回list[float]",
+              "单例模式确保模型只加载一次"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 24,
+        "status": "pending",
+        "parallel": true,
+        "parallel_note": "task_2_1需最先完成(其他模块依赖config)，task_2_2/2_3/2_4可并行",
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_3",
+        "name": "存储与提取模块",
+        "description": "实现vector_store/entity_extractor/knowledge_graph三个核心模块，依赖phase_2的基础模块",
+        "tasks": [
+          {
+            "task_id": "task_3_1",
+            "name": "实现ChromaDB向量存储模块",
+            "description": "src/vector_store.py: VectorStore类，封装ChromaDB操作(add_chunks/search/delete_by_doc/get_doc_count/get_chunk_count)",
+            "deliverables": [
+              "src/vector_store.py: VectorStore类，连接ChromaDB(HttpClient)，add_chunks(批量embedding+upsert)、search(向量相似度搜索)、delete_by_doc、get_doc_count、get_chunk_count方法"
+            ],
+            "acceptance_criteria": [
+              "可以连接ChromaDB(localhost:8300)",
+              "可以添加chunks并生成embedding",
+              "可以按query进行向量搜索",
+              "可以按doc_id删除",
+              "search返回: [{chunk_id, content, doc_id, score, metadata}]"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_3_2",
+            "name": "实现实体抽取模块",
+            "description": "src/entity_extractor.py: EntityExtractor类，基于LLM提取实体/关系/概念/锚关键词/标签/摘要，支持单独提取锚关键词",
+            "deliverables": [
+              "src/entity_extractor.py: EntityExtractor类，extract(完整提取)/extract_anchor_keywords_only(仅锚关键词)方法，EXTRACTION_PROMPT模板，返回{entities, relations, concepts, anchor_keywords, tags, summary}"
+            ],
+            "acceptance_criteria": [
+              "extract方法返回有效的JSON结构",
+              "anchor_keywords包含keyword+importance字段",
+              "extract_anchor_keywords_only返回10-25个关键词",
+              "JSON解析异常时有fallback返回空结构"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_3_3",
+            "name": "实现Neo4j知识图谱模块",
+            "description": "src/knowledge_graph.py: KnowledgeGraph类，完整实现所有图谱操作(文档CRUD/实体概念标签/知识树/学科分类/锚关键词/相似度建边/语义查询/图谱查询)",
+            "deliverables": [
+              "src/knowledge_graph.py: KnowledgeGraph类，包含所有方法:",
+              "- 文档操作: create_document, document_exists, delete_document",
+              "- 实体概念: create_entities, create_concepts, create_relations, add_tags",
+              "- 知识树: init_knowledge_tree (KnowledgeRoot+Domain+SubDomain)",
+              "- 学科分类: classify_document(关键词匹配+LLM兜底), link_document_to_domain",
+              "- 锚关键词: create_anchor_keywords, update_anchor_embeddings, build_anchor_similarity_edges",
+              "- 跨领域: discover_cross_domain_links",
+              "- 查询: search_by_semantic_query(核心), search_documents_by_keyword, get_document_graph, expand_from_entities, find_similar_documents, get_stats",
+              "- Chunk节点: create_chunk_node"
+            ],
+            "acceptance_criteria": [
+              "可以连接Neo4j(bolt://localhost:7687)",
+              "init_knowledge_tree创建KnowledgeRoot+7个Domain+11个SubDomain",
+              "classify_document能正确分类文档到学科领域",
+              "create_anchor_keywords创建MERGE保证唯一性",
+              "build_anchor_similarity_edges计算余弦相似度并创建SEMANTICALLY_SIMILAR关系",
+              "search_by_semantic_query返回关联文档和chunk",
+              "discover_cross_domain_links创建OVERLAPS_WITH关系"
+            ],
+            "estimated_time_minutes": 10,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 26,
+        "status": "pending",
+        "parallel": true,
+        "parallel_note": "task_3_1/3_2/3_3可并行(它们之间无直接依赖)",
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_4",
+        "name": "检索与排序模块",
+        "description": "实现混合检索、重排序、RAG对话引擎，依赖phase_3的存储模块",
+        "tasks": [
+          {
+            "task_id": "task_4_1",
+            "name": "实现混合检索模块",
+            "description": "src/hybrid_retriever.py: HybridRetriever类，融合向量检索+图谱增强+关键词BM25检索，加权合并排序",
+            "deliverables": [
+              "src/hybrid_retriever.py: HybridRetriever类，retrieve(混合检索)/_graph_enhanced_search(图谱增强)/_keyword_search(BM25)/_merge_results(加权合并)方法"
+            ],
+            "acceptance_criteria": [
+              "retrieve方法返回top_k个合并结果",
+              "三路检索结果正确加权融合",
+              "每条结果包含score和source字段"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_4_2",
+            "name": "实现重排序模块",
+            "description": "src/reranker.py: Reranker类，基于LLM对检索结果精排，0-10分评分",
+            "deliverables": [
+              "src/reranker.py: Reranker类，rerank方法，使用LLM对top-15结果评分并排序，返回top_k"
+            ],
+            "acceptance_criteria": [
+              "rerank方法返回按分数排序的结果",
+              "结果包含rerank_score字段",
+              "异常时返回原始top_k结果"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_4_3",
+            "name": "实现RAG对话引擎",
+            "description": "src/rag_chat.py: RAGChat类，完整RAG流程(检索→重排→构建Prompt→LLM生成)，支持多轮对话历史",
+            "deliverables": [
+              "src/rag_chat.py: RAGChat类，chat(对话检索)/clear_history方法，SYSTEM_PROMPT模板，history管理(最多10轮)"
+            ],
+            "acceptance_criteria": [
+              "chat方法返回{answer, sources, context_count}",
+              "多轮对话历史正确维护",
+              "上下文来自检索结果而非编造"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 21,
+        "status": "pending",
+        "parallel": true,
+        "parallel_note": "task_4_1需先完成，task_4_2和4_3可并行(4_3依赖4_1和4_2但在同一个phase内按顺序执行也可)",
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_5",
+        "name": "入库流水线与调度",
+        "description": "实现核心入库流水线和定时任务调度，串联前面所有模块",
+        "tasks": [
+          {
+            "task_id": "task_5_1",
+            "name": "实现文档入库流水线",
+            "description": "src/pipeline.py: IngestPipeline类，完整入库流程(加载→切块→向量化→LLM提取→创建文档节点→分类→锚关键词→相似度建边→跨领域关联)，支持file/url/directory/wechat_url四种入口",
+            "deliverables": [
+              "src/pipeline.py: IngestPipeline类:",
+              "- ingest_file: 单文件入库",
+              "- ingest_url: URL入库",
+              "- ingest_directory: 批量目录入库",
+              "- ingest_wechat_url: 微信公众号一键入库(scrapling爬取→MD→分类→锚关键词→建边)",
+              "- _ingest_doc: 内部完整入库逻辑(v2.0)",
+              "- semantic_search: 语义查询入口",
+              "- delete_document: 删除文档"
+            ],
+            "acceptance_criteria": [
+              "ingest_file: 文件→切块→ChromaDB+Neo4j入库成功",
+              "ingest_wechat_url: 微信URL→scrapling→MD→完整入库流程",
+              "自动分类到Domain/SubDomain",
+              "锚关键词提取+SEMANTICALLY_SIMILAR建边",
+              "返回: {doc_id, title, chunk_count, anchor_count, entity_count, domains, status}",
+              "去重检查: 已存在文档跳过"
+            ],
+            "estimated_time_minutes": 10,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_5_2",
+            "name": "实现定时任务和微信公众号入库脚本",
+            "description": "src/scheduler.py(定时扫描docs目录+爬取urls.txt) + src/wechat_ingest.py(CLI入口)",
+            "deliverables": [
+              "src/scheduler.py: TaskScheduler类，每天凌晨2点扫描docs目录，每小时爬取urls.txt",
+              "src/wechat_ingest.py: CLI入口，调用IngestPipeline.ingest_wechat_url"
+            ],
+            "acceptance_criteria": [
+              "scheduler能正确注册定时任务",
+              "已处理URL记录在urls_processed.txt",
+              "wechat_ingest.py可通过命令行调用"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 18,
+        "status": "pending",
+        "parallel": false,
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_6",
+        "name": "API层",
+        "description": "实现FastAPI API层，包含对话/文档/图谱/搜索四个路由模块",
+        "tasks": [
+          {
+            "task_id": "task_6_1",
+            "name": "实现FastAPI应用入口和数据模型",
+            "description": "api/__init__.py + api/main.py(FastAPI+CORS+路由注册) + api/models/__init__.py + api/models/schemas.py",
+            "deliverables": [
+              "api/__init__.py",
+              "api/main.py: FastAPI应用，CORS中间件，注册chat/documents/graph/search路由，/api/v1/health健康检查",
+              "api/models/__init__.py",
+              "api/models/schemas.py: ChatRequest/ChatResponse/IngestResponse等Pydantic模型"
+            ],
+            "acceptance_criteria": [
+              "uvicorn api.main:app 启动不报错",
+              "/api/v1/health 返回 {status: ok}",
+              "/docs 自动文档可访问"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_6_2",
+            "name": "实现对话和搜索路由",
+            "description": "api/routes/__init__.py + api/routes/chat.py(POST /, POST /clear) + api/routes/search.py(POST /hybrid, POST /vector)",
+            "deliverables": [
+              "api/routes/__init__.py",
+              "api/routes/chat.py: POST / 对话检索, POST /clear 清空历史",
+              "api/routes/search.py: POST /hybrid 混合检索, POST /vector 向量检索"
+            ],
+            "acceptance_criteria": [
+              "POST /api/v1/chat/ 返回ChatResponse",
+              "POST /api/v1/search/hybrid 返回混合检索结果",
+              "POST /api/v1/search/vector 返回向量检索结果"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_6_3",
+            "name": "实现文档和图谱路由",
+            "description": "api/routes/documents.py(POST /upload, POST /url, DELETE /{doc_id}, GET /stats) + api/routes/graph.py(POST /search, GET /document/{doc_id}, GET /similar/{doc_id}, GET /stats)",
+            "deliverables": [
+              "api/routes/documents.py: 文件上传、URL入库、删除文档、系统统计",
+              "api/routes/graph.py: 图谱全文搜索、文档图谱、相似文档、图谱统计"
+            ],
+            "acceptance_criteria": [
+              "POST /api/v1/documents/upload 文件上传入库",
+              "POST /api/v1/documents/url URL入库",
+              "DELETE /api/v1/documents/{doc_id} 删除文档",
+              "GET /api/v1/documents/stats 返回统计",
+              "POST /api/v1/graph/search 图谱搜索",
+              "GET /api/v1/graph/document/{doc_id} 文档图谱",
+              "GET /api/v1/graph/stats 图谱统计"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 21,
+        "status": "pending",
+        "parallel": true,
+        "parallel_note": "task_6_1需先完成，task_6_2和6_3可并行",
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_7",
+        "name": "前端界面",
+        "description": "实现Web前端界面(对话检索/混合搜索/图谱查询/文档管理四个标签页)",
+        "tasks": [
+          {
+            "task_id": "task_7_1",
+            "name": "实现前端HTML和CSS",
+            "description": "web/index.html(四个标签页: 对话检索/混合搜索/图谱查询/文档管理) + web/style.css(完整样式)",
+            "deliverables": [
+              "web/index.html: 完整HTML结构，四个面板(chat/search/graph/upload)",
+              "web/style.css: 现代化UI样式，响应式布局"
+            ],
+            "acceptance_criteria": [
+              "四个标签页可切换",
+              "各面板UI元素完整(输入框/按钮/滑块/文件上传)",
+              "样式美观，布局合理"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_7_2",
+            "name": "实现前端JavaScript",
+            "description": "web/app.js: 对话/搜索/图谱/上传四个模块的API调用逻辑",
+            "deliverables": [
+              "web/app.js: 完整前端逻辑，API_BASE=http://localhost:8100/api/v1，标签切换/对话/混合搜索(权重滑块)/图谱搜索/文件上传/URL入库/统计信息"
+            ],
+            "acceptance_criteria": [
+              "对话功能: 发送消息并显示回复+来源",
+              "混合搜索: 支持权重调节",
+              "图谱搜索: 关键词搜索+统计信息",
+              "文档管理: 文件上传+URL入库+统计"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 16,
+        "status": "pending",
+        "parallel": false,
+        "parallel_note": "task_7_1先完成HTML/CSS，task_7_2依赖HTML元素ID",
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_8",
+        "name": "工具脚本与部署配置",
+        "description": "CLI工具脚本、systemd服务配置",
+        "tasks": [
+          {
+            "task_id": "task_8_1",
+            "name": "实现CLI工具脚本",
+            "description": "scripts/add_document.py(文件/URL/目录/删除/统计) + scripts/init_system.py(创建目录+验证连接)",
+            "deliverables": [
+              "scripts/add_document.py: argparse CLI，支持file/url/dir/tags/delete/stats",
+              "scripts/init_system.py: 创建必要目录+验证ChromaDB/Neo4j/Embedding/LLM连接"
+            ],
+            "acceptance_criteria": [
+              "python scripts/add_document.py --stats 显示统计",
+              "python scripts/init_system.py 创建目录并验证连接",
+              "CLI帮助信息正确"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_8_2",
+            "name": "创建systemd服务配置",
+            "description": "knowledge-rag.service(FastAPI) + neo4j-knowledge.service(Docker Compose管理)",
+            "deliverables": [
+              "knowledge-rag.service: FastAPI uvicorn服务，端口8100",
+              "neo4j-knowledge.service: Docker Compose up/down"
+            ],
+            "acceptance_criteria": [
+              "service文件格式正确",
+              "路径指向正确的项目目录和venv",
+              "依赖docker.service"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 13,
+        "status": "pending",
+        "parallel": true,
+        "parallel_note": "task_8_1和8_2可并行",
+        "git_link": null
+      },
+      {
+        "phase_id": "phase_9",
+        "name": "集成测试与验证",
+        "description": "启动所有服务、验证功能、最终Git提交",
+        "tasks": [
+          {
+            "task_id": "task_9_1",
+            "name": "启动Docker服务并验证连接",
+            "description": "启动Neo4j+ChromaDB容器、执行Neo4j初始化脚本、验证所有服务连接",
+            "deliverables": [
+              "Neo4j运行在7474/7687",
+              "ChromaDB运行在8300",
+              "01_schema.cypher初始化完成",
+              "scripts/init_system.py 全部✅"
+            ],
+            "acceptance_criteria": [
+              "docker compose ps 显示两个容器running",
+              "curl localhost:7474 返回Neo4j页面",
+              "curl localhost:8300/api/v1/heartbeat 返回OK",
+              "Neo4j Browser可登录(neo4j/knowledge2026)",
+              "知识树初始化完成(KnowledgeRoot+Domain+SubDomain)"
+            ],
+            "estimated_time_minutes": 8,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_9_2",
+            "name": "启动API服务并端到端测试",
+            "description": "启动FastAPI服务、测试对话/搜索/上传API、添加测试文档验证完整流程",
+            "deliverables": [
+              "API运行在8100端口",
+              "所有API端点正常响应",
+              "测试文档入库成功(chunks+实体+锚关键词+分类)"
+            ],
+            "acceptance_criteria": [
+              "curl localhost:8100/api/v1/health 返回 {status: ok}",
+              "POST /api/v1/documents/upload 文件上传成功",
+              "POST /api/v1/chat/ 对话返回answer+sources",
+              "POST /api/v1/search/hybrid 搜索返回results",
+              "GET /api/v1/graph/stats 返回统计",
+              "向量库和图谱数据一致"
+            ],
+            "estimated_time_minutes": 10,
+            "status": "pending"
+          },
+          {
+            "task_id": "task_9_3",
+            "name": "最终Git提交和README完善",
+            "description": "完善README.md(部署指南+使用说明)、最终git commit + push",
+            "deliverables": [
+              "完善的README.md",
+              "最终git push到远程仓库"
+            ],
+            "acceptance_criteria": [
+              "README包含: 项目介绍、技术栈、部署步骤、API文档、使用示例",
+              "git log显示所有phase的提交",
+              "git push成功"
+            ],
+            "estimated_time_minutes": 5,
+            "status": "pending"
+          }
+        ],
+        "estimated_time_minutes": 23,
+        "status": "pending",
+        "parallel": false,
+        "git_link": null
+      }
+    ],
+    "total_tasks": 27,
+    "total_estimated_time_minutes": 190,
+    "parallel_phases": {
+      "phase_2": "task_2_1先完成，2_2/2_3/2_4可并行(3个coding agent)",
+      "phase_3": "task_3_1/3_2/3_3可并行(3个coding agent)",
+      "phase_6": "task_6_1先完成，6_2/6_3可并行(2个coding agent)",
+      "phase_8": "task_8_1/8_2可并行(2个coding agent)"
+    },
+    "dependencies": {
+      "phase_2_depends_on": "phase_1",
+      "phase_3_depends_on": "phase_2",
+      "phase_4_depends_on": "phase_3",
+      "phase_5_depends_on": "phase_3 + phase_4",
+      "phase_6_depends_on": "phase_5",
+      "phase_7_depends_on": "phase_6",
+      "phase_8_depends_on": "phase_1 (可更早并行)",
+      "phase_9_depends_on": "所有前置phase"
+    },
+    "optimization_note": "phase_8(工具脚本)可与phase_5/6/7并行执行，不影响核心流程。总关键路径: phase_1→2→3→4→5→6→7→9，约163分钟。加上phase_8并行，总计约190分钟。"
+  }
+}
