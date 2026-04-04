@@ -136,10 +136,14 @@ class TaskScheduler:
         """获取所有已注册的任务信息"""
         jobs = []
         for job in self.scheduler.get_jobs():
+            try:
+                nrt = str(job.next_run_time) if job.next_run_time else None
+            except AttributeError:
+                nrt = None
             jobs.append({
                 "id": job.id,
                 "name": job.name,
-                "next_run_time": str(job.next_run_time) if job.next_run_time else None,
+                "next_run_time": nrt,
                 "trigger": str(job.trigger),
             })
         return jobs
