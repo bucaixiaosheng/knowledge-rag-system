@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: neo4j-knowledge
+    restart: unless-stopped
+    ports:
+      - "7474:7474"    # HTTP Browser
+      - "7687:7687"    # Bolt协议
+    environment:
+      - NEO4J_AUTH=neo4j/knowledge2026
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=1G
+      - NEO4J_server_memory_pagecache_size=256m
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - ./neo4j/data:/data
+      - ./neo4j/logs:/logs
+      - ./neo4j/init:/var/lib/neo4j/import
+      - ./neo4j/conf:/conf
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - knowledge-net
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb-knowledge
+    restart: unless-stopped
+    ports:
+      - "8300:8000"
+    volumes:
+      - ./chroma:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["http://localhost:8100","*"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - knowledge-net
+
+networks:
+  knowledge-net:
+    driver: bridge
