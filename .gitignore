@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# 环境变量
+.env
+
+# Neo4j 数据目录
+neo4j/data/
+neo4j/logs/
+
+# ChromaDB 数据目录
+chroma/
+
+# 日志
+logs/*.log
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 测试和覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
