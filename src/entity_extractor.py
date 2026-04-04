@@ -71,7 +71,20 @@ class EntityExtractor:
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
-            result = json.loads(content)
+            # Robust JSON parsing for LLM output
+            try:
+                result = json.loads(content)
+            except json.JSONDecodeError:
+                # Try fixing common LLM JSON issues
+                import re
+                content = re.sub(r',\s*}', '}', content)
+                content = re.sub(r',\s*]', ']', content)
+                content = re.sub(r'"\s*:\s*"[^"]*"(?=[^,"]*",)', lambda m: m.group(0).replace('"', '\\"') if '\n' in m.group(0) else m.group(0), content)
+                try:
+                    result = json.loads(content)
+                except json.JSONDecodeError as e2:
+                    logger.error(f"JSON修复失败: {e2}")
+                    return {"entities": [], "relations": [], "concepts": [], "anchor_keywords": [], "tags": [], "summary": ""}
             result.setdefault("anchor_keywords", [])
             ak_count = len(result["anchor_keywords"])
             if ak_count < 5:

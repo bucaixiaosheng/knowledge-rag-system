@@ -6,6 +6,7 @@ import logging
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from datetime import datetime
@@ -57,7 +58,6 @@ class IngestPipeline:
 
     def ingest_wechat_url(self, url: str, tags: list[str] | None = None) -> dict:
         """微信公众号文章一键入库"""
-        # Step 1: 用scrapling爬取
         venv_python = os.path.expanduser(
             "~/.openclaw/skills/scrapling-article-fetch/venv/bin/python"
         )
@@ -65,37 +65,73 @@ class IngestPipeline:
             "~/.openclaw/skills/scrapling-article-fetch/scripts/scrapling_fetch.py"
         )
 
-        # 如果scrapling工具不存在，回退到通用URL加载
         if not os.path.isfile(venv_python) or not os.path.isfile(script):
             logger.warning("scrapling工具未安装，使用通用URL加载")
             return self.ingest_url(url, tags=tags)
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".json", delete=False, mode="w"
-        ) as f:
-            json_path = f.name
-
         try:
-            subprocess.run(
-                [venv_python, script, "--json", url, "50000"],
+            # scrapling_fetch.py 直接输出markdown到stdout
+            result = subprocess.run(
+                [venv_python, script, url, "50000"],
                 capture_output=True, text=True, timeout=60,
             )
-            # Step 2: 解析JSON，提取markdown
-            with open(json_path, encoding="utf-8") as f:
-                data = json.load(f)
+            md_content = result.stdout
+            if not md_content or len(md_content) < 100:
+                raise ValueError(f"scrapling返回内容太短: {len(md_content) if md_content else 0} bytes")
+            # 从markdown提取标题（改进版：前20行 + 正则fallback + URL fallback）
+            title = "Unknown"
+            # 1. 检查前20行，匹配 # 和 ## 开头的行
+            for line in md_content.split("\n")[:20]:
+                line = line.strip()
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+                if line.startswith("## "):
+                    title = line[3:].strip()
+                    break
+            # 2. 正则fallback：匹配 "01标题" / "02标题" 模式
+            if title == "Unknown":
+                for line in md_content.split("\n")[:20]:
+                    line = line.strip()
+                    m = re.match(r"^\d{1,2}(.+)", line)
+                    if m and len(m.group(1).strip()) > 2:
+                        title = m.group(1).strip()
+                        break
+            # 3. URL fallback：从URL最后一部分或域名提取
+            if title == "Unknown":
+                try:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(url)
+                    path_parts = [p for p in parsed.path.strip("/").split("/") if p]
+                    if path_parts:
+                        title = path_parts[-1].replace("-", " ").replace("_", " ")
+                    else:
+                        title = parsed.netloc
+                except Exception:
+                    title = "Unknown"
         except Exception as e:
             logger.error(f"scrapling爬取失败: {e}，回退到通用加载")
             return self.ingest_url(url, tags=tags)
-        finally:
-            if os.path.exists(json_path):
-                os.unlink(json_path)
-
-        title = data.get("title", "Unknown")
-        md_content = data.get("markdown", "")
 
         # Step 3: 保存MD文件到docs目录
+        # 清理md_content中的图片标签噪音
+        lines = md_content.split("\n")
+        cleaned_lines = []
+        for line in lines:
+            # 删除包含 mmbiz.qpic.cn 的图片标签行
+            if "mmbiz.qpic.cn" in line and re.search(r"!\[.*?\]\(.*?\)", line):
+                continue
+            # 删除纯图片行（只有 ![](...) 没有其他文字的行）
+            stripped = line.strip()
+            if re.fullmatch(r"!?\[.*?\]\(.*?\)", stripped):
+                continue
+            cleaned_lines.append(line)
+        md_content = "\n".join(cleaned_lines)
+        # 将连续3+空行压缩为1个空行
+        md_content = re.sub(r"\n{3,}", "\n\n", md_content)
+
         safe_title = "".join(
-            c for c in title[:50] if c.isalnum() or c in " _-将其替换"
+            c for c in title[:50] if c.isalnum() or c in " _-"
         ).strip() or "wechat_article"
         md_filename = f"{safe_title}.md"
         docs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")
