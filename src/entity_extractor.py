@@ -3,10 +3,15 @@
 """
 import json
 import logging
+import re
 from openai import OpenAI
+import json_repair
 from src.config import LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
 
 logger = logging.getLogger(__name__)
+
+# LLM调用超时秒数，防止进程hang住被SIGKILL
+_LLM_TIMEOUT = 120
 
 
 class EntityExtractor:
@@ -41,6 +46,64 @@ class EntityExtractor:
         self.client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
         self.model = LLM_MODEL
 
+    # 返回格式的空结果常量
+    _EMPTY_RESULT = {
+        "entities": [],
+        "relations": [],
+        "concepts": [],
+        "anchor_keywords": [],
+        "tags": [],
+        "summary": "",
+    }
+
+    def _parse_json_robust(self, content: str, label: str = "") -> dict | list | None:
+        """多级JSON解析策略：json.loads → json_repair → 优雅降级"""
+        # 1. 提取JSON块（处理markdown代码块包裹）
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+        content = content.strip()
+
+        # 2. 找到最外层的 { 或 [ 并截取
+        for opener, closer in [("{", "}"), ("[", "]")]:
+            start = content.find(opener)
+            if start >= 0:
+                content = content[start:]
+                break
+
+        # 3. 标准解析
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # 4. 快速regex修补（尾逗号等）
+        try:
+            fixed = re.sub(r',\s*}', '}', content)
+            fixed = re.sub(r',\s*]', ']', fixed)
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+
+        # 5. json_repair 库（处理未终止字符串、截断JSON、特殊字符等）
+        try:
+            repaired = json_repair.loads(content)
+            logger.info(f"[{label}] json_repair 修复成功")
+            return repaired
+        except Exception as e:
+            logger.warning(f"[{label}] json_repair 也失败: {e}")
+
+        # 6. 尝试暴力截断修复：从尾部逐步删除字符直到能解析
+        for i in range(1, min(200, len(content))):
+            try:
+                return json.loads(content[:-i])
+            except json.JSONDecodeError:
+                continue
+
+        logger.error(f"[{label}] 所有JSON修复策略均失败，优雅降级返回空结果")
+        return None
+
     def extract(self, text: str) -> dict:
         """
         从文本中提取实体、关系、概念和锚关键词。
@@ -65,27 +128,19 @@ class EntityExtractor:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=4000,
+                timeout=_LLM_TIMEOUT,
             )
             content = resp.choices[0].message.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            # Robust JSON parsing for LLM output
-            try:
-                result = json.loads(content)
-            except json.JSONDecodeError:
-                # Try fixing common LLM JSON issues
-                import re
-                content = re.sub(r',\s*}', '}', content)
-                content = re.sub(r',\s*]', ']', content)
-                content = re.sub(r'"\s*:\s*"[^"]*"(?=[^,"]*",)', lambda m: m.group(0).replace('"', '\\"') if '\n' in m.group(0) else m.group(0), content)
-                try:
-                    result = json.loads(content)
-                except json.JSONDecodeError as e2:
-                    logger.error(f"JSON修复失败: {e2}")
-                    return {"entities": [], "relations": [], "concepts": [], "anchor_keywords": [], "tags": [], "summary": ""}
-            result.setdefault("anchor_keywords", [])
+
+            result = self._parse_json_robust(content, label="extract")
+            if result is None or not isinstance(result, dict):
+                logger.error("extract: JSON解析最终失败，返回空结果")
+                return dict(self._EMPTY_RESULT)
+
+            # 确保所有必要字段存在
+            for key in self._EMPTY_RESULT:
+                result.setdefault(key, self._EMPTY_RESULT[key])
+
             ak_count = len(result["anchor_keywords"])
             if ak_count < 5:
                 logger.warning(f"锚关键词数量偏少 ({ak_count}个)，可能遗漏重要信息")
@@ -94,26 +149,9 @@ class EntityExtractor:
                 f"{len(result.get('concepts', []))} 概念, {ak_count} 锚关键词"
             )
             return result
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON解析失败: {e}")
-            return {
-                "entities": [],
-                "relations": [],
-                "concepts": [],
-                "anchor_keywords": [],
-                "tags": [],
-                "summary": "",
-            }
         except Exception as e:
             logger.error(f"实体抽取失败: {e}")
-            return {
-                "entities": [],
-                "relations": [],
-                "concepts": [],
-                "anchor_keywords": [],
-                "tags": [],
-                "summary": "",
-            }
+            return dict(self._EMPTY_RESULT)
 
     def extract_anchor_keywords_only(self, content: str, doc_title: str) -> list[dict]:
         """
@@ -138,13 +176,13 @@ class EntityExtractor:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=2000,
+                timeout=_LLM_TIMEOUT,
             )
             c = resp.choices[0].message.content.strip()
-            if "```json" in c:
-                c = c.split("```json")[1].split("```")[0]
-            elif "```" in c:
-                c = c.split("```")[1].split("```")[0]
-            kws = json.loads(c)
+            kws = self._parse_json_robust(c, label="anchor_keywords")
+            if kws is None or not isinstance(kws, list):
+                logger.error("anchor_keywords: JSON解析最终失败，返回空列表")
+                return []
             logger.info(f"单独提取锚关键词: {len(kws)} 个")
             return kws
         except Exception as e:
