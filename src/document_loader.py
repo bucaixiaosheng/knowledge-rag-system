@@ -39,9 +39,8 @@ class DocumentLoader:
         if ext not in self.SUPPORTED_EXTENSIONS:
             raise ValueError(f"不支持的文件格式: {ext}")
 
-        # 生成文档ID
-        with open(path, "rb") as f:
-            doc_id = hashlib.sha256(f.read()).hexdigest()[:16]
+        # 生成文档ID（基于路径，避免不同路径同内容碰撞）
+        doc_id = f"md_{hashlib.sha256(str(path.absolute()).encode()).hexdigest()[:16]}"
 
         content = ""
         doc_type = ext.lstrip(".")
@@ -81,7 +80,7 @@ class DocumentLoader:
         title = BeautifulSoup(resp.text, "html.parser").title
         title_text = title.string.strip() if title and title.string else url
 
-        doc_id = hashlib.sha256(url.encode()).hexdigest()[:16]
+        doc_id = f"url_{hashlib.sha256(url.encode()).hexdigest()[:16]}"
 
         return {
             "doc_id": doc_id,

@@ -112,3 +112,45 @@ class TestGenerateWechatDocId:
         ]
         doc_ids = [generate_wechat_doc_id(u) for u in urls]
         assert len(doc_ids) == len(set(doc_ids)), f"碰撞发现: {doc_ids}"
+
+
+class TestLocalFileDocId:
+    """本地文件doc_id生成的单元测试"""
+
+    def test_md_file_has_md_prefix(self, tmp_path):
+        """MD文件doc_id以md_开头"""
+        from src.document_loader import DocumentLoader
+        loader = DocumentLoader()
+        (tmp_path / "test.md").write_text("# Test")
+        doc = loader.load_file(str(tmp_path / "test.md"))
+        assert doc["doc_id"].startswith("md_")
+        assert len(doc["doc_id"]) == 19  # md_ + 16 hex chars
+
+    def test_different_paths_same_content_no_collision(self, tmp_path):
+        """不同路径的同名同内容文件生成不同doc_id"""
+        from src.document_loader import DocumentLoader
+        loader = DocumentLoader()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        (tmp_path / "a" / "test.md").write_text("# Same content")
+        (tmp_path / "b" / "test.md").write_text("# Same content")
+        doc_a = loader.load_file(str(tmp_path / "a" / "test.md"))
+        doc_b = loader.load_file(str(tmp_path / "b" / "test.md"))
+        assert doc_a["doc_id"] != doc_b["doc_id"]
+
+    def test_same_path_same_file_idempotent(self, tmp_path):
+        """同路径同文件生成相同doc_id"""
+        from src.document_loader import DocumentLoader
+        loader = DocumentLoader()
+        (tmp_path / "test.md").write_text("# Test")
+        doc1 = loader.load_file(str(tmp_path / "test.md"))
+        doc2 = loader.load_file(str(tmp_path / "test.md"))
+        assert doc1["doc_id"] == doc2["doc_id"]
+
+    def test_url_doc_has_url_prefix(self):
+        """URL加载的doc_id以url_开头"""
+        import hashlib
+        url = "https://example.com/article/123"
+        expected = f"url_{hashlib.sha256(url.encode()).hexdigest()[:16]}"
+        assert expected.startswith("url_")
+        assert len(expected) == 20  # url_ + 16 hex chars
