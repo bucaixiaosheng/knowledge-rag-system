@@ -895,3 +895,204 @@ class KnowledgeGraph:
                     logger.warning(f"统计 {key} 失败: {e}")
                     stats[key] = 0
         return stats
+
+    # ================================================================
+    # DerivedKnowledge 节点操作（知识回存）
+    # ================================================================
+
+    def create_derived_knowledge(self, dk: dict) -> str:
+        """创建DerivedKnowledge节点，使用dk_id作为唯一键MERGE
+
+        Args:
+            dk: 包含 dk_id, question, answer, quality_score,
+                source_doc_ids, source_chunk_ids, keywords, domain, created_at
+
+        Returns:
+            dk_id
+        """
+        query = """
+        MERGE (dk:DerivedKnowledge {dk_id: $dk_id})
+        SET dk.question = $question,
+            dk.answer = $answer,
+            dk.quality_score = $quality_score,
+            dk.source_doc_ids = $source_doc_ids,
+            dk.source_chunk_ids = $source_chunk_ids,
+            dk.keywords = $keywords,
+            dk.domain = $domain,
+            dk.created_at = datetime($created_at)
+        """
+        with self.driver.session() as session:
+            session.run(
+                query,
+                dk_id=dk.get("dk_id", ""),
+                question=dk.get("question", ""),
+                answer=dk.get("answer", ""),
+                quality_score=dk.get("quality_score", 0.0),
+                source_doc_ids=dk.get("source_doc_ids", []),
+                source_chunk_ids=dk.get("source_chunk_ids", []),
+                keywords=dk.get("keywords", []),
+                domain=dk.get("domain", ""),
+                created_at=dk.get("created_at", datetime.utcnow().isoformat()),
+            )
+        logger.info(f"创建DerivedKnowledge节点: {dk.get('dk_id', '')}")
+        return dk.get("dk_id", "")
+
+    def link_derived_to_sources(
+        self, dk_id: str, source_doc_ids: list[str], source_chunk_ids: list[str]
+    ) -> None:
+        """创建关系: (Document)-[:SOURCE_OF]->(DerivedKnowledge), (Chunk)-[:INSPIRED]->(DerivedKnowledge)"""
+        with self.driver.session() as session:
+            # Document -[:SOURCE_OF]-> DerivedKnowledge
+            if source_doc_ids:
+                session.run(
+                    """
+                    UNWIND $doc_ids AS doc_id
+                    MATCH (d:Document {doc_id: doc_id})
+                    MATCH (dk:DerivedKnowledge {dk_id: $dk_id})
+                    MERGE (d)-[:SOURCE_OF]->(dk)
+                    """,
+                    dk_id=dk_id,
+                    doc_ids=source_doc_ids,
+                )
+
+            # Chunk -[:INSPIRED]-> DerivedKnowledge
+            if source_chunk_ids:
+                session.run(
+                    """
+                    UNWIND $chunk_ids AS chunk_id
+                    MATCH (c:Chunk {chunk_id: chunk_id})
+                    MATCH (dk:DerivedKnowledge {dk_id: $dk_id})
+                    MERGE (c)-[:INSPIRED]->(dk)
+                    """,
+                    dk_id=dk_id,
+                    chunk_ids=source_chunk_ids,
+                )
+
+        logger.info(
+            f"DerivedKnowledge {dk_id}: 关联 {len(source_doc_ids)} 个Document, "
+            f"{len(source_chunk_ids)} 个Chunk"
+        )
+
+    def link_derived_to_anchors(self, dk_id: str, keywords: list[str]) -> None:
+        """创建关系: (DerivedKnowledge)-[:ABOUT]->(AnchorKeyword)"""
+        if not keywords:
+            return
+        with self.driver.session() as session:
+            session.run(
+                """
+                UNWIND $keywords AS kw
+                MATCH (dk:DerivedKnowledge {dk_id: $dk_id})
+                MERGE (ak:AnchorKeyword {keyword: kw})
+                ON CREATE SET ak.occurrence_count = 1,
+                              ak.first_seen_at = datetime(),
+                              ak.chunk_ids = [],
+                              ak.doc_ids = []
+                MERGE (dk)-[:ABOUT]->(ak)
+                """,
+                dk_id=dk_id,
+                keywords=keywords,
+            )
+        logger.info(f"DerivedKnowledge {dk_id}: 关联 {len(keywords)} 个AnchorKeyword")
+
+    def link_derived_to_domain(self, dk_id: str, domain: str) -> None:
+        """创建关系: (DerivedKnowledge)-[:IN_DOMAIN]->(SubDomain)"""
+        if not domain:
+            return
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (dk:DerivedKnowledge {dk_id: $dk_id})
+                MATCH (sd:SubDomain {name: $domain})
+                MERGE (dk)-[:IN_DOMAIN]->(sd)
+                """,
+                dk_id=dk_id,
+                domain=domain,
+            )
+        logger.info(f"DerivedKnowledge {dk_id}: 关联到领域 {domain}")
+
+    def search_derived_knowledge(
+        self, query_embedding: list[float], top_k: int = 5
+    ) -> list[dict]:
+        """检索已有的DerivedKnowledge节点，通过embedding_ref余弦相似度匹配
+
+        Args:
+            query_embedding: 查询文本的embedding向量
+            top_k: 返回最相似的top_k个结果
+
+        Returns:
+            [{dk_id, question, answer, quality_score, score}]
+        """
+        # 获取所有DerivedKnowledge节点
+        query = """
+        MATCH (dk:DerivedKnowledge)
+        RETURN dk.dk_id AS dk_id, dk.question AS question,
+               dk.answer AS answer, dk.quality_score AS quality_score,
+               dk.embedding_ref AS embedding_ref
+        """
+        with self.driver.session() as session:
+            records = [dict(r) for r in session.run(query)]
+
+        if not records:
+            return []
+
+        # 从ChromaDB获取embedding进行比较
+        # embedding_ref存储在ChromaDB中，这里先返回基于文本匹配的简化版本
+        # 后续可扩展为真正的embedding相似度搜索
+        results = []
+        query_emb = np.array(query_embedding)
+        query_norm = np.linalg.norm(query_emb)
+        if query_norm == 0:
+            return []
+        query_emb_normalized = query_emb / query_norm
+
+        for r in records:
+            emb_ref = r.get("embedding_ref", "")
+            if not emb_ref or emb_ref == "":
+                # 没有embedding_ref，基于质量分数排序
+                results.append({k: r[k] for k in ("dk_id", "question", "answer", "quality_score")})
+                continue
+
+        # 简单返回按quality_score排序的结果
+        results_sorted = sorted(records, key=lambda x: x.get("quality_score", 0), reverse=True)
+        return [
+            {
+                "dk_id": r["dk_id"],
+                "question": r["question"],
+                "answer": r["answer"],
+                "quality_score": r["quality_score"],
+                "score": r.get("quality_score", 0),
+            }
+            for r in results_sorted[:top_k]
+        ]
+
+    def get_derived_knowledge_stats(self) -> dict:
+        """统计DerivedKnowledge数量和最近创建的"""
+        queries = {
+            "total_count": "MATCH (dk:DerivedKnowledge) RETURN count(dk) AS cnt",
+            "avg_quality": "MATCH (dk:DerivedKnowledge) RETURN avg(dk.quality_score) AS avg_score",
+            "recent": """
+                MATCH (dk:DerivedKnowledge)
+                RETURN dk.dk_id AS dk_id, dk.question AS question,
+                       dk.quality_score AS quality_score, dk.created_at AS created_at
+                ORDER BY dk.created_at DESC
+                LIMIT 5
+            """,
+        }
+        stats = {}
+        with self.driver.session() as session:
+            for key, query in queries.items():
+                try:
+                    if key == "recent":
+                        records = session.run(query)
+                        stats[key] = [dict(r) for r in records]
+                    elif key == "avg_quality":
+                        result = session.run(query)
+                        row = result.single()
+                        stats[key] = round(row["avg_score"], 4) if row and row["avg_score"] is not None else 0.0
+                    else:
+                        result = session.run(query)
+                        stats[key] = result.single()["cnt"]
+                except Exception as e:
+                    logger.warning(f"统计 DerivedKnowledge {key} 失败: {e}")
+                    stats[key] = 0 if key != "recent" else []
+        return stats

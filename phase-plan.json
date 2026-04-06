@@ -1,6 +1,7 @@
 {
   "phase_plan": {
-    "status": "coding",
+    "status": "completed",
+    "completed_at": "2026-04-04T15:25:00+08:00",
     "version": "1.1",
     "created_at": "2026-04-04T15:11:00+08:00",
     "task_id": "knowledge_rag_v1.1",
@@ -28,13 +29,16 @@
               "重新入库被删文档不报ConstraintValidationError"
             ],
             "estimated_time_minutes": 8,
-            "files_to_modify": ["src/knowledge_graph.py"],
-            "status": "pending",
+            "files_to_modify": [
+              "src/knowledge_graph.py"
+            ],
+            "status": "completed",
             "sprints": []
           }
         ],
         "estimated_time_minutes": 8,
-        "status": "pending",
+        "status": "completed",
+        "git_link": "6cbd1f2",
         "dependencies": []
       },
       {
@@ -64,14 +68,19 @@
               "所有命令有--help说明"
             ],
             "estimated_time_minutes": 10,
-            "files_to_modify": ["cli.py（新建）"],
-            "status": "pending",
+            "files_to_modify": [
+              "cli.py（新建）"
+            ],
+            "status": "completed",
             "sprints": []
           }
         ],
         "estimated_time_minutes": 10,
-        "status": "pending",
-        "dependencies": ["phase_1"]
+        "status": "completed",
+        "git_link": "180fc57",
+        "dependencies": [
+          "phase_1"
+        ]
       },
       {
         "phase_id": "phase_3",
@@ -97,13 +106,17 @@
             ],
             "estimated_time_minutes": 10,
             "files_to_modify": [],
-            "status": "pending",
+            "status": "completed",
             "sprints": []
           }
         ],
         "estimated_time_minutes": 10,
-        "status": "pending",
-        "dependencies": ["phase_1", "phase_2"]
+        "status": "completed",
+        "git_link": "bd573a0",
+        "dependencies": [
+          "phase_1",
+          "phase_2"
+        ]
       },
       {
         "phase_id": "phase_4",
@@ -126,14 +139,21 @@
               "中文编写、格式清晰、面向非技术用户友好"
             ],
             "estimated_time_minutes": 10,
-            "files_to_modify": ["docs/USER_GUIDE.md（新建）"],
-            "status": "pending",
+            "files_to_modify": [
+              "docs/USER_GUIDE.md（新建）"
+            ],
+            "status": "completed",
             "sprints": []
           }
         ],
         "estimated_time_minutes": 10,
-        "status": "pending",
-        "dependencies": ["phase_1", "phase_2", "phase_3"]
+        "status": "completed",
+        "git_link": "9b45f41",
+        "dependencies": [
+          "phase_1",
+          "phase_2",
+          "phase_3"
+        ]
       }
     ],
     "total_phases": 4,
