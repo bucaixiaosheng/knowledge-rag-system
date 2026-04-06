@@ -36,6 +36,11 @@ MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8100"))
 
+# 知识回存配置
+WRITEBACK_ENABLED = os.getenv('WRITEBACK_ENABLED', 'true').lower() == 'true'
+WRITEBACK_THRESHOLD = float(os.getenv('WRITEBACK_THRESHOLD', '0.7'))
+WRITEBACK_DEDUP_THRESHOLD = float(os.getenv('WRITEBACK_DEDUP_THRESHOLD', '0.95'))
+
 # 路径
 PROJECT_ROOT = Path(__file__).parent.parent
 DOCS_DIR = PROJECT_ROOT / "docs"
