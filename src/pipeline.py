@@ -17,7 +17,9 @@ from src.vector_store import VectorStore
 from src.knowledge_graph import KnowledgeGraph
 from src.entity_extractor import EntityExtractor
 from src.embedding import EmbeddingEngine
-from src.config import CHUNK_SIZE, CHUNK_OVERLAP
+from src.knowledge_writeback import KnowledgeWriteback
+from src.config import CHUNK_SIZE, CHUNK_OVERLAP, WRITEBACK_ENABLED
+from src.rag_chat import RAGChat
 
 logger = logging.getLogger(__name__)
 
@@ -297,3 +299,27 @@ class IngestPipeline:
         }
         logger.info(f"文档已删除: {result}")
         return result
+
+    def create_rag_chat(self, retriever=None, reranker=None) -> RAGChat:
+        """构建RAGChat实例，如果WRITEBACK_ENABLED=True则注入KnowledgeWriteback
+
+        Args:
+            retriever: 混合检索器实例（可选，默认使用HybridRetriever）
+            reranker: 重排序器实例（可选）
+
+        Returns:
+            RAGChat实例
+        """
+        writeback_engine = None
+        if WRITEBACK_ENABLED:
+            try:
+                writeback_engine = KnowledgeWriteback(self.kg, self.emb_engine)
+                logger.info("知识回存引擎已注入RAGChat")
+            except Exception as e:
+                logger.warning(f"知识回存引擎初始化失败(不影响使用): {e}")
+
+        return RAGChat(
+            retriever=retriever,
+            reranker=reranker,
+            writeback_engine=writeback_engine,
+        )
