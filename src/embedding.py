@@ -3,7 +3,7 @@ Embedding模块：使用本地模型生成向量
 """
 import logging
 from sentence_transformers import SentenceTransformer
-from src.config import EMBEDDING_MODEL, EMBEDDING_DEVICE
+from src.config import EMBEDDING_DEVICE, resolve_local_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,9 @@ class EmbeddingEngine:
     def __init__(self):
         if self._initialized:
             return
-        logger.info(f"加载Embedding模型: {EMBEDDING_MODEL}")
-        self.model = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE)
+        model_path = resolve_local_model_path()
+        logger.info(f"加载Embedding模型, 路径: {model_path}")
+        self.model = SentenceTransformer(model_path, device=EMBEDDING_DEVICE)
         self.dimension = self.model.get_sentence_embedding_dimension()
         self._initialized = True
         logger.info(f"Embedding模型加载完成, 维度: {self.dimension}")
