@@ -1116,12 +1116,12 @@ class KnowledgeGraph:
         """
         if not keyword:
             return
-        event = {
+        event = json.dumps({
             "timestamp": datetime.now().isoformat(),
             "doc_id": doc_id,
             "chunk_id": chunk_id,
             "action": action,
-        }
+        }, ensure_ascii=False)
         query = """
         MERGE (ak:AnchorKeyword {keyword: $keyword})
         SET ak.evolution_events = CASE
@@ -1154,7 +1154,7 @@ class KnowledgeGraph:
         if not row or row["events"] is None:
             return []
 
-        events = list(row["events"])
+        events = [json.loads(e) if isinstance(e, str) else e for e in row["events"]]
         events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
         return events[:limit]
 
@@ -1241,58 +1241,32 @@ class KnowledgeGraph:
         Returns:
             [{"keyword": str, "event_count": int, "recent_docs": int}]
         """
-        cutoff = datetime.now().isoformat()
-        # 使用UNWIND展开evolution_events后按时间过滤
-        query = """
-        MATCH (ak:AnchorKeyword)
-        WHERE ak.evolution_events IS NOT NULL
-        WITH ak, [e IN ak.evolution_events WHERE e.timestamp >= $cutoff] AS recent_events
-        WHERE size(recent_events) > 0
-        RETURN ak.keyword AS keyword,
-               size(recent_events) AS event_count,
-               size([e IN recent_events WHERE e.timestamp >= $cutoff | e.doc_id]) AS doc_id_list
-        ORDER BY event_count DESC
-        LIMIT $top_k
-        """
-
-        # 先计算cutoff日期
         from datetime import timedelta
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
 
-        # 修正查询使用正确的cutoff
-        query_fixed = """
+        # evolution_events are JSON strings; filter in Python
+        query = """
         MATCH (ak:AnchorKeyword)
         WHERE ak.evolution_events IS NOT NULL
-        WITH ak, [e IN ak.evolution_events WHERE e.timestamp >= $cutoff] AS recent_events
-        WHERE size(recent_events) > 0
-        WITH ak, recent_events, size(recent_events) AS event_count
-        RETURN ak.keyword AS keyword,
-               event_count,
-               size(apoc.coll.toSet([e IN recent_events | e.doc_id])) AS recent_docs
-        ORDER BY event_count DESC
-        LIMIT $top_k
-        """
-
-        # APOC可能不可用，用纯Cypher替代
-        query_safe = """
-        MATCH (ak:AnchorKeyword)
-        WHERE ak.evolution_events IS NOT NULL
-        WITH ak, [e IN ak.evolution_events WHERE e.timestamp >= $cutoff] AS recent_events
-        WHERE size(recent_events) > 0
-        WITH ak, recent_events, size(recent_events) AS event_count
-        UNWIND recent_events AS evt
-        WITH ak, event_count, collect(DISTINCT evt.doc_id) AS distinct_doc_ids
-        RETURN ak.keyword AS keyword,
-               event_count,
-               size(distinct_doc_ids) AS recent_docs
-        ORDER BY event_count DESC
-        LIMIT $top_k
+        RETURN ak.keyword AS keyword, ak.evolution_events AS events
         """
 
         try:
             with self.driver.session() as session:
-                records = session.run(query_safe, cutoff=cutoff_date, top_k=top_k)
-                return [dict(r) for r in records]
+                records = session.run(query)
+                results = []
+                for r in records:
+                    events = [json.loads(e) if isinstance(e, str) else e for e in r["events"]]
+                    recent = [e for e in events if e.get("timestamp", "") >= cutoff_date]
+                    if recent:
+                        doc_ids = list(set(e.get("doc_id", "") for e in recent))
+                        results.append({
+                            "keyword": r["keyword"],
+                            "event_count": len(recent),
+                            "recent_docs": len(doc_ids),
+                        })
+                results.sort(key=lambda x: x["event_count"], reverse=True)
+                return results[:top_k]
         except Exception as e:
             logger.warning(f"趋势关键词查询失败: {e}")
             # 降级：直接返回occurrence_count最高的关键词
