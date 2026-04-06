@@ -54,7 +54,7 @@ class RAGChat:
         rag.clear_history()  # 清空历史
     """
 
-    def __init__(self, retriever=None, reranker=None):
+    def __init__(self, retriever=None, reranker=None, writeback_engine=None):
         """
         Args:
             retriever: 混合检索器实例（HybridRetriever 或兼容接口）。
@@ -66,6 +66,7 @@ class RAGChat:
         """
         self.retriever = retriever
         self.reranker = reranker
+        self.writeback_engine = writeback_engine
         self.llm = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
         self.history: list[dict] = []  # 对话历史 [{role, content}, ...]
 
@@ -129,6 +130,15 @@ class RAGChat:
         # 保持历史在 MAX_HISTORY_MESSAGES 以内（保留最近的消息）
         if len(self.history) > MAX_HISTORY_MESSAGES:
             self.history = self.history[-MAX_HISTORY_MESSAGES:]
+
+        # ---- Step 7: 知识回存（非阻塞） ----
+        if self.writeback_engine:
+            try:
+                wb_result = self.writeback_engine.writeback(query, answer, sources, results)
+                if wb_result.get("status") == "written":
+                    logger.info(f"知识回存成功: {wb_result['dk_id']}")
+            except Exception as e:
+                logger.warning(f"知识回存失败(不影响回答): {e}")
 
         return {
             "answer": answer,
