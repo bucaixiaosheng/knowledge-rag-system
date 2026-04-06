@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from datetime import datetime
 
+from urllib.parse import urlparse, parse_qs
+
 from src.document_loader import DocumentLoader
 from src.text_chunker import TextChunker
 from src.vector_store import VectorStore
@@ -22,6 +24,47 @@ from src.config import CHUNK_SIZE, CHUNK_OVERLAP, WRITEBACK_ENABLED
 from src.rag_chat import RAGChat
 
 logger = logging.getLogger(__name__)
+
+
+def generate_wechat_doc_id(url: str) -> str:
+    """为微信URL生成唯一且稳定的doc_id。
+
+    策略：
+    1. 短URL格式 /s/XXXXX → wx_XXXXX（直接使用路径中的唯一hash）
+    2. 长URL格式（含sn参数）→ wx_{sn}
+    3. 其他微信URL → wx_{SHA256(url)[:24]}
+    4. 非微信URL → {SHA256(url)[:24]}（无wx_前缀）
+
+    Args:
+        url: 文档来源URL
+
+    Returns:
+        doc_id字符串，以wx_开头（微信URL）或无前缀（其他URL）
+    """
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    is_wechat = "mp.weixin.qq.com" in host
+
+    if not is_wechat:
+        # 非微信URL：使用SHA256[:24]（96位，碰撞概率极低）
+        return hashlib.sha256(url.encode()).hexdigest()[:24]
+
+    # 微信URL处理
+    path = parsed.path.rstrip("/")
+
+    # 策略1: 短URL格式 /s/{hash}
+    short_match = re.match(r"^/s/([A-Za-z0-9_-]+)$", path)
+    if short_match:
+        return f"wx_{short_match.group(1)}"
+
+    # 策略2: 长URL格式，提取sn参数
+    qs = parse_qs(parsed.query)
+    sn_values = qs.get("sn", []) or qs.get("__sn", [])
+    if sn_values and sn_values[0]:
+        return f"wx_{sn_values[0]}"
+
+    # 策略3: 其他微信URL，使用SHA256[:24]
+    return f"wx_{hashlib.sha256(url.encode()).hexdigest()[:24]}"
 
 
 class IngestPipeline:
@@ -145,10 +188,10 @@ class IngestPipeline:
             )
         logger.info(f"微信文章已保存: {md_path}")
 
-        # Step 4: 走完整入库流程
+        # Step 4: 走完整入库流程（使用新的ID生成函数）
         return self._ingest_doc(
             {
-                "doc_id": f"wx_{hashlib.md5(url.encode()).hexdigest()[:12]}",
+                "doc_id": generate_wechat_doc_id(url),
                 "title": title,
                 "source": url,
                 "doc_type": "wechat_article",
