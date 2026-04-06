@@ -231,6 +231,19 @@ class IngestPipeline:
                 chunk_anchors = anchor_keywords
             # 创建锚关键词节点
             self.kg.create_anchor_keywords(chunk_anchors, chunk["chunk_id"], doc_id)
+
+            # 记录关键词演化事件
+            for kw in chunk_anchors:
+                try:
+                    self.kg.record_keyword_evolution(
+                        keyword=kw.get("keyword", ""),
+                        doc_id=doc_id,
+                        chunk_id=chunk["chunk_id"],
+                        action="appeared",
+                    )
+                except Exception as e:
+                    logger.warning(f"记录关键词演化事件失败: {e}")
+
             all_anchor_keywords.extend(chunk_anchors)
 
         # Step 8: 计算锚关键词embedding + 相似度建边

@@ -1096,3 +1096,215 @@ class KnowledgeGraph:
                     logger.warning(f"统计 DerivedKnowledge {key} 失败: {e}")
                     stats[key] = 0 if key != "recent" else []
         return stats
+
+    # ================================================================
+    # 知识演化追踪
+    # ================================================================
+
+    def record_keyword_evolution(
+        self, keyword: str, doc_id: str, chunk_id: str, action: str = "appeared"
+    ) -> None:
+        """记录锚关键词演化事件。
+
+        在AnchorKeyword节点上追加evolution_events列表属性。
+
+        Args:
+            keyword: 锚关键词文本
+            doc_id: 文档ID
+            chunk_id: Chunk ID
+            action: 事件类型，默认 "appeared"
+        """
+        if not keyword:
+            return
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "doc_id": doc_id,
+            "chunk_id": chunk_id,
+            "action": action,
+        }
+        query = """
+        MERGE (ak:AnchorKeyword {keyword: $keyword})
+        SET ak.evolution_events = CASE
+            WHEN ak.evolution_events IS NULL THEN [$event]
+            ELSE ak.evolution_events + $event
+        END
+        """
+        with self.driver.session() as session:
+            session.run(query, keyword=keyword, event=event)
+        logger.debug(f"记录演化事件: {keyword} ({action}) in {doc_id}/{chunk_id}")
+
+    def get_keyword_history(self, keyword: str, limit: int = 50) -> list:
+        """查询某个锚关键词的完整演化历史。
+
+        Args:
+            keyword: 锚关键词文本
+            limit: 返回事件数量上限
+
+        Returns:
+            按timestamp排序的演化事件列表
+        """
+        query = """
+        MATCH (ak:AnchorKeyword {keyword: $keyword})
+        RETURN ak.evolution_events AS events
+        """
+        with self.driver.session() as session:
+            result = session.run(query, keyword=keyword)
+            row = result.single()
+
+        if not row or row["events"] is None:
+            return []
+
+        events = list(row["events"])
+        events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        return events[:limit]
+
+    def get_document_timeline(self, limit: int = 20) -> list:
+        """获取文档入库时间线（按创建时间倒序）。
+
+        Args:
+            limit: 返回数量上限
+
+        Returns:
+            [{"doc_id": str, "title": str, "created_at": str}]
+        """
+        query = """
+        MATCH (d:Document)
+        RETURN d.doc_id AS doc_id, d.title AS title, d.created_at AS created_at
+        ORDER BY d.created_at DESC
+        LIMIT $limit
+        """
+        with self.driver.session() as session:
+            records = session.run(query, limit=limit)
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "title": r["title"],
+                    "created_at": str(r["created_at"]),
+                }
+                for r in records
+            ]
+
+    def get_domain_heat_stats(self) -> dict:
+        """统计各SubDomain的文档数量、最近活跃时间和AnchorKeyword数量。
+
+        Returns:
+            {domain_name: {"doc_count": int, "last_active": str, "keyword_count": int}}
+        """
+        # 查询各SubDomain的文档数量和最近活跃时间
+        doc_query = """
+        MATCH (sd:SubDomain)-[:CONTAINS_DOC]->(d:Document)
+        RETURN sd.name AS domain, count(d) AS doc_count,
+               max(d.created_at) AS last_active
+        ORDER BY doc_count DESC
+        """
+        # 查询每个domain的AnchorKeyword数量
+        kw_query = """
+        MATCH (sd:SubDomain)-[:CONTAINS_DOC]->(d:Document)
+              -[:HAS_CHUNK]->(c:Chunk)-[:HAS_ANCHOR]->(ak:AnchorKeyword)
+        RETURN sd.name AS domain, count(DISTINCT ak) AS keyword_count
+        """
+
+        doc_stats = {}
+        kw_stats = {}
+
+        with self.driver.session() as session:
+            for r in session.run(doc_query):
+                doc_stats[r["domain"]] = {
+                    "doc_count": r["doc_count"],
+                    "last_active": str(r["last_active"]) if r["last_active"] else None,
+                }
+
+            for r in session.run(kw_query):
+                kw_stats[r["domain"]] = r["keyword_count"]
+
+        # 合并结果
+        all_domains = set(doc_stats.keys()) | set(kw_stats.keys())
+        result = {}
+        for domain in all_domains:
+            ds = doc_stats.get(domain, {})
+            result[domain] = {
+                "doc_count": ds.get("doc_count", 0),
+                "last_active": ds.get("last_active"),
+                "keyword_count": kw_stats.get(domain, 0),
+            }
+        return result
+
+    def get_trending_keywords(self, days: int = 7, top_k: int = 10) -> list:
+        """查询最近N天被引用最多的锚关键词（热度趋势）。
+
+        通过evolution_events中的timestamp过滤。
+
+        Args:
+            days: 回溯天数
+            top_k: 返回数量上限
+
+        Returns:
+            [{"keyword": str, "event_count": int, "recent_docs": int}]
+        """
+        cutoff = datetime.now().isoformat()
+        # 使用UNWIND展开evolution_events后按时间过滤
+        query = """
+        MATCH (ak:AnchorKeyword)
+        WHERE ak.evolution_events IS NOT NULL
+        WITH ak, [e IN ak.evolution_events WHERE e.timestamp >= $cutoff] AS recent_events
+        WHERE size(recent_events) > 0
+        RETURN ak.keyword AS keyword,
+               size(recent_events) AS event_count,
+               size([e IN recent_events WHERE e.timestamp >= $cutoff | e.doc_id]) AS doc_id_list
+        ORDER BY event_count DESC
+        LIMIT $top_k
+        """
+
+        # 先计算cutoff日期
+        from datetime import timedelta
+        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+
+        # 修正查询使用正确的cutoff
+        query_fixed = """
+        MATCH (ak:AnchorKeyword)
+        WHERE ak.evolution_events IS NOT NULL
+        WITH ak, [e IN ak.evolution_events WHERE e.timestamp >= $cutoff] AS recent_events
+        WHERE size(recent_events) > 0
+        WITH ak, recent_events, size(recent_events) AS event_count
+        RETURN ak.keyword AS keyword,
+               event_count,
+               size(apoc.coll.toSet([e IN recent_events | e.doc_id])) AS recent_docs
+        ORDER BY event_count DESC
+        LIMIT $top_k
+        """
+
+        # APOC可能不可用，用纯Cypher替代
+        query_safe = """
+        MATCH (ak:AnchorKeyword)
+        WHERE ak.evolution_events IS NOT NULL
+        WITH ak, [e IN ak.evolution_events WHERE e.timestamp >= $cutoff] AS recent_events
+        WHERE size(recent_events) > 0
+        WITH ak, recent_events, size(recent_events) AS event_count
+        UNWIND recent_events AS evt
+        WITH ak, event_count, collect(DISTINCT evt.doc_id) AS distinct_doc_ids
+        RETURN ak.keyword AS keyword,
+               event_count,
+               size(distinct_doc_ids) AS recent_docs
+        ORDER BY event_count DESC
+        LIMIT $top_k
+        """
+
+        try:
+            with self.driver.session() as session:
+                records = session.run(query_safe, cutoff=cutoff_date, top_k=top_k)
+                return [dict(r) for r in records]
+        except Exception as e:
+            logger.warning(f"趋势关键词查询失败: {e}")
+            # 降级：直接返回occurrence_count最高的关键词
+            fallback = """
+            MATCH (ak:AnchorKeyword)
+            WHERE ak.occurrence_count IS NOT NULL
+            RETURN ak.keyword AS keyword,
+                   ak.occurrence_count AS event_count,
+                   size(ak.doc_ids) AS recent_docs
+            ORDER BY event_count DESC
+            LIMIT $top_k
+            """
+            with self.driver.session() as session:
+                records = session.run(fallback, top_k=top_k)
+                return [dict(r) for r in records]
