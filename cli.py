@@ -220,6 +220,23 @@ def _print_ingest_result(result: dict):
         print(f"❌ 入库失败: {result.get('error', result.get('reason', 'unknown'))}")
 
 
+def cmd_lint(args):
+    """知识库健康检查"""
+    from src.knowledge_graph import KnowledgeGraph
+    from src.lint import KnowledgeLint
+
+    kg = KnowledgeGraph()
+    linter = KnowledgeLint(kg)
+    report = linter.run_all_checks(fix=args.fix)
+    print(report.to_text())
+
+    kg.close()
+
+    # 返回状态码
+    if report.errors > 0:
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="cli.py",
@@ -258,6 +275,11 @@ def main():
     # ---- list-docs ----
     list_parser = subparsers.add_parser("list-docs", help="列出所有文档")
     list_parser.set_defaults(func=cmd_list_docs)
+
+    # ---- lint ----
+    lint_parser = subparsers.add_parser('lint', help='知识库健康检查')
+    lint_parser.add_argument('--fix', action='store_true', help='自动修复可修复的问题')
+    lint_parser.set_defaults(func=cmd_lint)
 
     args = parser.parse_args()
 
