@@ -220,6 +220,66 @@ def _print_ingest_result(result: dict):
         print(f"❌ 入库失败: {result.get('error', result.get('reason', 'unknown'))}")
 
 
+def cmd_evolution(args):
+    """知识演化统计"""
+    from src.knowledge_graph import KnowledgeGraph
+
+    kg = KnowledgeGraph()
+
+    print("📈 知识演化统计")
+    print("=" * 40)
+
+    # 1. 领域热度
+    print("\n🌐 领域热度:")
+    stats = kg.get_domain_heat_stats()
+    if stats:
+        for domain, info in stats.items():
+            print(f"  {domain}: {info.get('doc_count', 0)}篇文档 | {info.get('keyword_count', 0)}个关键词 | 最近活跃: {info.get('last_active', 'N/A')}")
+    else:
+        print("  (暂无数据)")
+
+    # 2. 热门关键词
+    print(f"\n🔥 近{args.days}天热门关键词:")
+    trending = kg.get_trending_keywords(days=args.days, top_k=args.top_k)
+    if trending:
+        for i, item in enumerate(trending, 1):
+            print(f"  {i}. {item.get('keyword', 'N/A')} (出现{item.get('event_count', 0)}次)")
+    else:
+        print("  (暂无数据)")
+
+    # 3. 最近入库文档
+    print("\n📚 最近入库文档:")
+    timeline = kg.get_document_timeline(limit=10)
+    if timeline:
+        for doc in timeline:
+            print(f"  [{doc.get('created_at', 'N/A')}] {doc.get('title', 'N/A')} ({doc.get('doc_id', 'N/A')})")
+    else:
+        print("  (暂无数据)")
+
+    kg.close()
+
+
+def cmd_keyword_history(args):
+    """查看关键词演化历史"""
+    from src.knowledge_graph import KnowledgeGraph
+
+    kg = KnowledgeGraph()
+
+    print(f"🔍 关键词历史: {args.keyword}")
+    print("=" * 50)
+
+    history = kg.get_keyword_history(args.keyword, limit=args.limit)
+    if history:
+        print(f"{'时间':<25} {'文档ID':<20} {'动作'}")
+        print("-" * 70)
+        for event in history:
+            print(f"{event.get('timestamp', 'N/A'):<25} {event.get('doc_id', 'N/A'):<20} {event.get('action', 'N/A')}")
+    else:
+        print("  该关键词暂无历史记录")
+
+    kg.close()
+
+
 def cmd_lint(args):
     """知识库健康检查"""
     from src.knowledge_graph import KnowledgeGraph
@@ -275,6 +335,18 @@ def main():
     # ---- list-docs ----
     list_parser = subparsers.add_parser("list-docs", help="列出所有文档")
     list_parser.set_defaults(func=cmd_list_docs)
+
+    # ---- evolution ----
+    evolution_parser = subparsers.add_parser('evolution', help='知识演化统计')
+    evolution_parser.add_argument('--days', type=int, default=7, help='热门关键词统计天数')
+    evolution_parser.add_argument('--top-k', type=int, default=10, help='热门关键词数量')
+    evolution_parser.set_defaults(func=cmd_evolution)
+
+    # ---- keyword-history ----
+    kh_parser = subparsers.add_parser('keyword-history', help='查看关键词历史')
+    kh_parser.add_argument('keyword', type=str, help='要查询的关键词')
+    kh_parser.add_argument('--limit', type=int, default=20, help='返回历史条数')
+    kh_parser.set_defaults(func=cmd_keyword_history)
 
     # ---- lint ----
     lint_parser = subparsers.add_parser('lint', help='知识库健康检查')
