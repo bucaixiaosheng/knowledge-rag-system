@@ -22,6 +22,7 @@ from src.embedding import EmbeddingEngine
 from src.knowledge_writeback import KnowledgeWriteback
 from src.config import CHUNK_SIZE, CHUNK_OVERLAP, WRITEBACK_ENABLED
 from src.rag_chat import RAGChat
+from src.hybrid_retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ class IngestPipeline:
         self.kg = KnowledgeGraph()
         self.extractor = EntityExtractor()
         self.emb_engine = EmbeddingEngine()
+        self.hybrid_retriever = HybridRetriever(self.vector_store, self.kg, self.extractor)
 
     @staticmethod
     def _validate_extracted_title(title: str) -> bool:
@@ -460,9 +462,55 @@ class IngestPipeline:
         }
 
     def semantic_search(self, query: str, top_k: int = 10) -> list[dict]:
-        """语义查询入口"""
-        query_embedding = self.emb_engine.embed_query(query)
-        return self.kg.search_by_semantic_query(query, query_embedding, top_k)
+        """语义查询入口（HybridRetriever 三路融合检索，文档级去重）"""
+        raw_results = self.hybrid_retriever.retrieve(query, top_k=top_k * 3)
+
+        # 文档级去重：每个doc_id只保留最高分的一条，确保结果多样性
+        seen_docs = {}
+        for r in raw_results:
+            doc_id = r.get("doc_id", "")
+            if not doc_id:
+                continue
+            if doc_id not in seen_docs or r.get("score", 0) > seen_docs[doc_id].get("score", 0):
+                seen_docs[doc_id] = r
+
+        # 图譔回补：部分文档可能只有图谱数据（未入ChromaDB），
+        # 在融合排序中被向量结果挤掉。回补图谱独有的文档，确保不遗漏。
+        # 回补分数使用与HybridRetriever一致的图谱权重（0.35）缩放。
+        if len(seen_docs) < top_k:
+            try:
+                query_embedding = self.emb_engine.embed_query(query)
+                graph_results = self.kg.search_by_semantic_query(query, query_embedding, top_k=top_k * 2)
+                graph_fallback = []
+                for item in graph_results:
+                    if item.get("type") == "related_knowledge":
+                        continue  # 跳过扩展知识，只处理chunk结果
+                    doc_id = item.get("doc_id", "")
+                    if doc_id and doc_id not in seen_docs:
+                        raw_score = float(item.get("relevance_score") or item.get("keyword_score", 0))
+                        graph_fallback.append({
+                            "chunk_id": item.get("chunk_id", f"graph_{doc_id}"),
+                            "content": item.get("content", "") or item.get("summary", ""),
+                            "doc_id": doc_id,
+                            "score": round(raw_score * 0.35, 4),  # 与HybridRetriever图谱权重一致
+                            "source": "graph",
+                            "metadata": {
+                                "title": item.get("title", ""),
+                                "matched_keyword": item.get("matched_keyword", ""),
+                            },
+                        })
+                # 按score降序取前N个回补
+                graph_fallback.sort(key=lambda x: x["score"], reverse=True)
+                for fb in graph_fallback:
+                    if len(seen_docs) >= top_k:
+                        break
+                    seen_docs[fb["doc_id"]] = fb
+            except Exception as e:
+                logger.warning(f"图譔回补失败（不影响主流程）: {e}")
+
+        # 按score降序排列后截取top_k
+        results = sorted(seen_docs.values(), key=lambda x: x.get("score", 0), reverse=True)
+        return results[:top_k]
 
     def delete_document(self, doc_id: str) -> dict:
         """删除文档（级联清理：向量库 + 知识图谱）"""

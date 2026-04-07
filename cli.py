@@ -68,7 +68,7 @@ def cmd_ingest(args):
 
 
 def cmd_search(args):
-    """语义搜索"""
+    """语义搜索（HybridRetriever 三路融合检索）"""
     from src.pipeline import IngestPipeline
 
     pipeline = IngestPipeline()
@@ -85,27 +85,38 @@ def cmd_search(args):
 
     print(f"\n找到 {len(results)} 条相关结果:\n")
     for i, r in enumerate(results, 1):
-        if r.get("type") == "related_knowledge":
-            # 相似知识扩展
-            print(f"  🔗 [{i}] 相关知识: {r.get('related_keyword', 'N/A')} (相似度: {r.get('similarity', 'N/A')})")
-            for rd in r.get("related_docs", []):
-                print(f"       └─ {rd.get('title', 'N/A')} ({rd.get('doc_id', '')})")
-            continue
-
-        title = r.get("title", "N/A")
-        source = r.get("source", "")
+        # HybridRetriever 返回格式: chunk_id, content, doc_id, score, source, metadata
+        metadata = r.get("metadata", {}) or {}
+        title = metadata.get("title", "") or r.get("title", "")
         doc_id = r.get("doc_id", "")
-        score = r.get("relevance_score") or r.get("keyword_score", "N/A")
-        kw = r.get("matched_keyword", "")
-        summary = r.get("summary", "") or r.get("content", "")
-        if summary and len(summary) > 200:
-            summary = summary[:200] + "..."
+        score = r.get("score", "N/A")
+        source = r.get("source", "")
+        content = r.get("content", "")
+        matched_keyword = metadata.get("matched_keyword", "")
+
+        # 来源标识
+        source_labels = {
+            "vector": "向量检索",
+            "graph": "图谱检索",
+            "graph_expansion": "图谱扩展",
+            "keyword": "关键词检索",
+        }
+        source_label = source_labels.get(source, source)
+
+        # 标题回退：metadata.title > content截取
+        if not title and content:
+            title = content[:60] + "..." if len(content) > 60 else content
+        if not title:
+            title = "N/A"
+
+        # 摘要：截取 content
+        summary = content[:200] + "..." if content and len(content) > 200 else (content or "")
 
         print(f"  📄 [{i}] {title}")
-        print(f"       来源: {source or doc_id}")
-        if kw:
-            print(f"       匹配关键词: {kw}")
-        print(f"       相关度: {score}")
+        print(f"       文档ID: {doc_id}")
+        print(f"       来源: {source_label} | 融合分数: {score}")
+        if matched_keyword:
+            print(f"       匹配关键词: {matched_keyword}")
         if summary:
             print(f"       摘要: {summary}")
         print()
