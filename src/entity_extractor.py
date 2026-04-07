@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # LLM调用超时秒数，防止进程hang住被SIGKILL
 _LLM_TIMEOUT = 120
 
+# 批量提取时合并文本的最大字符数，超过则回退到逐chunk调用
+BATCH_MAX_CHARS = 30000
+
 
 class EntityExtractor:
     """基于LLM的实体抽取"""
@@ -152,6 +155,71 @@ class EntityExtractor:
         except Exception as e:
             logger.error(f"实体抽取失败: {e}")
             return dict(self._EMPTY_RESULT)
+
+    def extract_anchor_keywords_batch(self, chunks: list[dict], doc_title: str) -> list[dict]:
+        """
+        批量提取锚关键词：合并所有chunk为一次LLM调用，减少API开销。
+
+        若合并后总字符数 > BATCH_MAX_CHARS (30000)，自动回退到逐chunk调用。
+
+        Args:
+            chunks: list[dict]，每个 dict 含 content 字段
+            doc_title: 文档标题
+
+        Returns:
+            list[dict]: [{"keyword": "xxx", "importance": 0.9}]
+        """
+        try:
+            if not chunks:
+                return []
+
+            # 合并所有chunk内容
+            combined = "\n\n---CHUNK_BOUNDARY---\n\n".join(
+                chunk["content"] for chunk in chunks if chunk.get("content")
+            )
+
+            # 超过阈值则回退到逐chunk调用
+            if len(combined) > BATCH_MAX_CHARS:
+                logger.info(
+                    f"批量文本过长 ({len(combined)} > {BATCH_MAX_CHARS})，回退到逐chunk提取"
+                )
+                all_kws: list[dict] = []
+                for chunk in chunks:
+                    if chunk.get("content"):
+                        all_kws.extend(
+                            self.extract_anchor_keywords_only(
+                                chunk["content"], doc_title
+                            )
+                        )
+                return all_kws
+
+            # 单次LLM调用：批量提取
+            prompt = f"""从以下多段文本中提取所有关键术语作为锚关键词。
+这些文本来自同一份文档（标题：{doc_title}），被分为多个段落（用 ---CHUNK_BOUNDARY--- 分隔）。
+请综合所有段落的内容，提取10-25个关键词，覆盖：技术名词、产品名、公司名、人名、框架名、协议名、概念术语、工具名。只提取文本中明确提到的内容。
+
+文本内容：
+{combined}
+
+返回JSON数组：[{{"keyword": "xxx", "importance": 0.9}}]"""
+
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=2000,
+                timeout=_LLM_TIMEOUT,
+            )
+            c = resp.choices[0].message.content.strip()
+            kws = self._parse_json_robust(c, label="anchor_keywords_batch")
+            if kws is None or not isinstance(kws, list):
+                logger.error("anchor_keywords_batch: JSON解析失败，返回空列表")
+                return []
+            logger.info(f"批量提取锚关键词: {len(kws)} 个 (合并 {len(chunks)} 个chunk)")
+            return kws
+        except Exception as e:
+            logger.error(f"批量锚关键词提取失败: {e}")
+            return []
 
     def extract_anchor_keywords_only(self, content: str, doc_title: str) -> list[dict]:
         """

@@ -330,22 +330,21 @@ class IngestPipeline:
                 self.kg.add_tags(doc_tags, doc_id)
 
             # Step 7: 创建Chunk节点 + 锚关键词节点（核心！）
+            # 如果全文档级别的锚关键词不够，批量提取一次（替代逐chunk调用）
+            if not anchor_keywords:
+                batch_anchors = self.extractor.extract_anchor_keywords_batch(chunks, doc["title"])
+            else:
+                batch_anchors = anchor_keywords
+
             all_anchor_keywords = []
             for chunk in chunks:
                 # 创建Chunk节点
                 self.kg.create_chunk_node(chunk)
-                # 如果全文档级别的锚关键词不够，按chunk补充
-                if not anchor_keywords:
-                    chunk_anchors = self.extractor.extract_anchor_keywords_only(
-                        chunk["content"], doc["title"]
-                    )
-                else:
-                    chunk_anchors = anchor_keywords
-                # 创建锚关键词节点
-                self.kg.create_anchor_keywords(chunk_anchors, chunk["chunk_id"], doc_id)
+                # 使用批量提取的锚关键词
+                self.kg.create_anchor_keywords(batch_anchors, chunk["chunk_id"], doc_id)
 
                 # 记录关键词演化事件
-                for kw in chunk_anchors:
+                for kw in batch_anchors:
                     try:
                         self.kg.record_keyword_evolution(
                             keyword=kw.get("keyword", ""),
@@ -356,7 +355,7 @@ class IngestPipeline:
                     except Exception as e:
                         logger.warning(f"记录关键词演化事件失败: {e}")
 
-                all_anchor_keywords.extend(chunk_anchors)
+                all_anchor_keywords.extend(batch_anchors)
 
             # Step 8: 计算锚关键词embedding + 相似度建边
             seen = set()
