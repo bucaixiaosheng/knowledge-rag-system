@@ -13,8 +13,13 @@ logger = logging.getLogger(__name__)
 # LLM调用超时秒数，防止进程hang住被SIGKILL
 _LLM_TIMEOUT = 120
 
-# 批量提取时合并文本的最大字符数，超过则回退到逐chunk调用
+# [deprecated] 旧常量，保留用于向后兼容
 BATCH_MAX_CHARS = 30000
+
+# 每批合并的最大字符数
+BATCH_CHUNK_SIZE = 15000
+# 单个chunk超过此字符数时，独占一个batch
+SINGLE_CHUNK_THRESHOLD = 5000
 
 
 class EntityExtractor:
@@ -158,9 +163,12 @@ class EntityExtractor:
 
     def extract_anchor_keywords_batch(self, chunks: list[dict], doc_title: str) -> list[dict]:
         """
-        批量提取锚关键词：合并所有chunk为一次LLM调用，减少API开销。
+        分批合并策略提取锚关键词：将chunk按字符数分组合并，每组合并为一次LLM调用。
 
-        若合并后总字符数 > BATCH_MAX_CHARS (30000)，自动回退到逐chunk调用。
+        分组规则：
+        - 每批累积字符数不超过 BATCH_CHUNK_SIZE (15000)
+        - 单个chunk超过 SINGLE_CHUNK_THRESHOLD (5000) 时独占一个batch
+        - 合并所有batch结果后去重，取最高importance
 
         Args:
             chunks: list[dict]，每个 dict 含 content 字段
@@ -173,28 +181,66 @@ class EntityExtractor:
             if not chunks:
                 return []
 
-            # 合并所有chunk内容
-            combined = "\n\n---CHUNK_BOUNDARY---\n\n".join(
-                chunk["content"] for chunk in chunks if chunk.get("content")
+            # === 分组算法 ===
+            batches: list[list[dict]] = []
+            current_batch: list[dict] = []
+            current_batch_chars = 0
+
+            for chunk in chunks:
+                content = chunk.get("content", "")
+                # a. 空内容跳过
+                if not content or not content.strip():
+                    continue
+                chunk_len = len(content)
+
+                # b. 大chunk独占batch
+                if chunk_len > SINGLE_CHUNK_THRESHOLD:
+                    if current_batch:
+                        batches.append(current_batch)
+                        current_batch = []
+                        current_batch_chars = 0
+                    batches.append([chunk])
+                    logger.debug(
+                        f"大chunk独占batch: {chunk_len} 字符 > SINGLE_CHUNK_THRESHOLD={SINGLE_CHUNK_THRESHOLD}"
+                    )
+                    continue
+
+                # c. 普通chunk：检查是否需要封存当前batch
+                if current_batch_chars + chunk_len >= BATCH_CHUNK_SIZE:
+                    if current_batch:
+                        batches.append(current_batch)
+                    current_batch = [chunk]
+                    current_batch_chars = chunk_len
+                else:
+                    current_batch.append(chunk)
+                    current_batch_chars += chunk_len
+
+            # 封存最后一个batch
+            if current_batch:
+                batches.append(current_batch)
+
+            total_batches = len(batches)
+            total_chunks = sum(len(b) for b in batches)
+            logger.info(
+                f"分批合并: {total_chunks} 个有效chunk分为 {total_batches} 批"
             )
 
-            # 超过阈值则回退到逐chunk调用
-            if len(combined) > BATCH_MAX_CHARS:
-                logger.info(
-                    f"批量文本过长 ({len(combined)} > {BATCH_MAX_CHARS})，回退到逐chunk提取"
-                )
-                all_kws: list[dict] = []
-                for chunk in chunks:
-                    if chunk.get("content"):
-                        all_kws.extend(
-                            self.extract_anchor_keywords_only(
-                                chunk["content"], doc_title
-                            )
-                        )
-                return all_kws
+            if not batches:
+                return []
 
-            # 单次LLM调用：批量提取
-            prompt = f"""从以下多段文本中提取所有关键术语作为锚关键词。
+            # === 逐batch LLM调用 ===
+            all_results: list[dict] = []
+            for batch_idx, batch in enumerate(batches, 1):
+                batch_chars = sum(len(c.get("content", "")) for c in batch)
+                combined = "\n\n---CHUNK_BOUNDARY---\n\n".join(
+                    c["content"] for c in batch if c.get("content")
+                )
+                logger.info(
+                    f"批次 {batch_idx}/{total_batches}: "
+                    f"{len(batch)} 个chunk, {batch_chars} 字符"
+                )
+
+                prompt = f"""从以下多段文本中提取所有关键术语作为锚关键词。
 这些文本来自同一份文档（标题：{doc_title}），被分为多个段落（用 ---CHUNK_BOUNDARY--- 分隔）。
 请综合所有段落的内容，提取10-25个关键词，覆盖：技术名词、产品名、公司名、人名、框架名、协议名、概念术语、工具名。只提取文本中明确提到的内容。
 
@@ -203,22 +249,47 @@ class EntityExtractor:
 
 返回JSON数组：[{{"keyword": "xxx", "importance": 0.9}}]"""
 
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2000,
-                timeout=_LLM_TIMEOUT,
+                try:
+                    resp = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1,
+                        max_tokens=2000,
+                        timeout=_LLM_TIMEOUT,
+                    )
+                    c = resp.choices[0].message.content.strip()
+                    kws = self._parse_json_robust(c, label=f"anchor_keywords_batch_{batch_idx}")
+                    if kws and isinstance(kws, list):
+                        all_results.extend(kws)
+                        logger.info(
+                            f"批次 {batch_idx}/{total_batches}: 提取 {len(kws)} 个关键词"
+                        )
+                    else:
+                        logger.warning(
+                            f"批次 {batch_idx}/{total_batches}: JSON解析失败，跳过"
+                        )
+                except Exception as e:
+                    logger.error(f"批次 {batch_idx}/{total_batches}: LLM调用失败: {e}")
+
+            # === 合并去重 ===
+            seen: dict[str, float] = {}
+            for kw in all_results:
+                keyword = kw.get("keyword", "").strip()
+                if keyword:
+                    importance = kw.get("importance", 0.5)
+                    if keyword in seen:
+                        seen[keyword] = max(seen[keyword], importance)
+                    else:
+                        seen[keyword] = importance
+
+            result = [{"keyword": k, "importance": v} for k, v in seen.items()]
+            logger.info(
+                f"分批提取完成: 合并前 {len(all_results)} 个 → 去重后 {len(result)} 个锚关键词"
             )
-            c = resp.choices[0].message.content.strip()
-            kws = self._parse_json_robust(c, label="anchor_keywords_batch")
-            if kws is None or not isinstance(kws, list):
-                logger.error("anchor_keywords_batch: JSON解析失败，返回空列表")
-                return []
-            logger.info(f"批量提取锚关键词: {len(kws)} 个 (合并 {len(chunks)} 个chunk)")
-            return kws
+            return result
+
         except Exception as e:
-            logger.error(f"批量锚关键词提取失败: {e}")
+            logger.error(f"分批锚关键词提取失败: {e}")
             return []
 
     def extract_anchor_keywords_only(self, content: str, doc_title: str) -> list[dict]:
