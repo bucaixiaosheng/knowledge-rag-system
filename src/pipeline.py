@@ -78,6 +78,48 @@ class IngestPipeline:
         self.extractor = EntityExtractor()
         self.emb_engine = EmbeddingEngine()
 
+    @staticmethod
+    def _validate_extracted_title(title: str) -> bool:
+        """验证从markdown提取的标题是否合法。
+
+        检查项：
+        1. 标题长度 ≤ 50字符
+        2. 不含正文标点模式（连续逗号+句号等）
+        3. 不含换行符
+        4. 不是以口语化词汇开头且超长（如"其实我一直想搞点短视频副业来着..."）
+
+        Returns:
+            True表示标题合法，False表示可疑（应走HTML fallback）
+        """
+        if not title or title == "Unknown":
+            return False
+
+        # 检查1: 长度超过50字符
+        if len(title) > 50:
+            logger.debug(f"标题验证失败: 长度{len(title)}超过50字符 - {title!r}")
+            return False
+
+        # 检查2: 包含换行符
+        if "\n" in title or "\r" in title:
+            logger.debug(f"标题验证失败: 包含换行符 - {title!r}")
+            return False
+
+        # 检查3: 正文标点模式（连续逗号/句号/顿号/分号，如 "，，" "。。" "，。"）
+        if re.search(r"[，。、；：]{2,}", title) or re.search(r"[,.;:]{2,}", title):
+            logger.debug(f"标题验证失败: 含连续标点模式 - {title!r}")
+            return False
+
+        # 检查4: 口语化开头 + 偏长文本（>20字）
+        colloquial_starts = (
+            "其实", "最近", "之前", "说实话", "说真的",
+            "不过", "但是", "然而", "今天", "昨天", "刚才",
+        )
+        if title.startswith(colloquial_starts) and len(title) > 20:
+            logger.debug(f"标题验证失败: 口语化开头且偏长 - {title!r}")
+            return False
+
+        return True
+
     def ingest_file(self, file_path: str, tags: list[str] | None = None, force: bool = False) -> dict:
         """单文件入库（完整流程）"""
         doc = self.loader.load_file(file_path)
@@ -142,6 +184,10 @@ class IngestPipeline:
                 if line.startswith("## "):
                     title = line[3:].strip()
                     break
+            # 验证步骤1提取的标题
+            if title != "Unknown" and not IngestPipeline._validate_extracted_title(title):
+                logger.warning(f"标题验证失败(步骤1-markdown标题)，将回退到HTML fallback: {title!r}")
+                title = "Unknown"
             # 2. 正则fallback：匹配 "01标题" / "02标题" 模式
             if title == "Unknown":
                 for line in md_content.split("\n")[:20]:
@@ -150,6 +196,10 @@ class IngestPipeline:
                     if m and len(m.group(1).strip()) > 2:
                         title = m.group(1).strip()
                         break
+            # 验证步骤2提取的标题
+            if title != "Unknown" and not IngestPipeline._validate_extracted_title(title):
+                logger.warning(f"标题验证失败(步骤2-正则fallback)，将回退到HTML fallback: {title!r}")
+                title = "Unknown"
             # 3. HTML fallback：从页面元数据获取标题（og:title > title > msg_title）
             if title == "Unknown":
                 try:
