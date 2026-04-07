@@ -343,21 +343,37 @@ class KnowledgeGraph:
 
 只返回JSON：{{"primary": "领域名", "secondary": ["领域名"]}}"""
 
-            resp = client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=200,
-            )
-            content_r = resp.choices[0].message.content.strip()
-            if "```json" in content_r:
-                content_r = content_r.split("```json")[1].split("```")[0]
-            elif "```" in content_r:
-                content_r = content_r.split("```")[1].split("```")[0]
-            parsed = json.loads(content_r)
-            result = [parsed["primary"]] + parsed.get("secondary", [])[:2]
-            logger.info(f"LLM分类 {doc_id}: {result}")
-            return result
+            for attempt in range(2):
+                try:
+                    resp = client.chat.completions.create(
+                        model=LLM_MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0,
+                        max_tokens=200,
+                        timeout=30,
+                    )
+                    content_r = resp.choices[0].message.content
+                    if not content_r or content_r.strip() == '':
+                        logger.warning(f"LLM返回空响应 {doc_id}, attempt={attempt+1}")
+                        if attempt == 0:
+                            continue
+                        logger.warning(f"LLM两次空响应 {doc_id}, 使用关键词匹配结果")
+                        return ["AI"]
+                    content_r = content_r.strip()
+                    if "```json" in content_r:
+                        content_r = content_r.split("```json")[1].split("```")[0]
+                    elif "```" in content_r:
+                        content_r = content_r.split("```")[1].split("```")[0]
+                    parsed = json.loads(content_r)
+                    result = [parsed["primary"]] + parsed.get("secondary", [])[:2]
+                    logger.info(f"LLM分类 {doc_id}: {result}")
+                    return result
+                except json.JSONDecodeError as e:
+                    logger.warning(f"LLM响应JSON解析失败 {doc_id}, attempt={attempt+1}: {e}")
+                    if attempt == 0:
+                        continue
+                    logger.error(f"LLM分类两次失败 {doc_id}, 默认归入AI")
+                    return ["AI"]
         except Exception as e:
             logger.error(f"LLM分类失败: {e}, 默认归入Technology/AI")
             return ["AI"]
