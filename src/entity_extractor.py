@@ -257,16 +257,71 @@ class EntityExtractor:
                         max_tokens=2000,
                         timeout=_LLM_TIMEOUT,
                     )
-                    c = resp.choices[0].message.content.strip()
+                    c = resp.choices[0].message.content or ""
+                    c = c.strip()
+                    logger.info(
+                        f"批次 {batch_idx}/{total_batches}: "
+                        f"LLM返回内容长度={len(c)} 字符"
+                    )
                     kws = self._parse_json_robust(c, label=f"anchor_keywords_batch_{batch_idx}")
-                    if kws and isinstance(kws, list):
+
+                    # 检测空返回 / 非法结果
+                    if kws is None or not isinstance(kws, list) or len(kws) == 0:
+                        raw_preview = c[:200] if c else "<空>"
+                        logger.warning(
+                            f"批次 {batch_idx}/{total_batches}: "
+                            f"LLM返回为空或解析失败 (type={type(kws).__name__}), "
+                            f"原始内容前200字符: {raw_preview}"
+                        )
+
+                        # === Fallback: 用简化prompt重试 ===
+                        logger.info(
+                            f"批次 {batch_idx}/{total_batches}: "
+                            f"开始fallback重试（截取前3000字符）"
+                        )
+                        try:
+                            fallback_prompt = (
+                                f"从以下文本摘要中提取5-15个关键术语。"
+                                f"只返回JSON数组：[{{\"keyword\": \"xxx\", \"importance\": 0.9}}]。"
+                                f"文本摘要：{combined[:3000]}"
+                            )
+                            fb_resp = self.client.chat.completions.create(
+                                model=self.model,
+                                messages=[{"role": "user", "content": fallback_prompt}],
+                                temperature=0.1,
+                                max_tokens=1000,
+                                timeout=_LLM_TIMEOUT,
+                            )
+                            fb_content = fb_resp.choices[0].message.content or ""
+                            fb_content = fb_content.strip()
+                            logger.info(
+                                f"批次 {batch_idx}/{total_batches} fallback: "
+                                f"返回内容长度={len(fb_content)} 字符"
+                            )
+                            fb_kws = self._parse_json_robust(
+                                fb_content, label=f"anchor_keywords_batch_{batch_idx}_fallback"
+                            )
+                            if fb_kws and isinstance(fb_kws, list) and len(fb_kws) > 0:
+                                all_results.extend(fb_kws)
+                                logger.info(
+                                    f"批次 {batch_idx}/{total_batches} fallback: "
+                                    f"成功提取 {len(fb_kws)} 个关键词"
+                                )
+                            else:
+                                logger.warning(
+                                    f"批次 {batch_idx}/{total_batches} fallback: "
+                                    f"仍未提取到关键词，跳过该批次"
+                                )
+                        except Exception as fb_err:
+                            logger.warning(
+                                f"批次 {batch_idx}/{total_batches} fallback: "
+                                f"重试LLM调用失败: {fb_err}"
+                            )
+                    else:
+                        # 正常路径：LLM返回有效关键词列表
                         all_results.extend(kws)
                         logger.info(
                             f"批次 {batch_idx}/{total_batches}: 提取 {len(kws)} 个关键词"
-                        )
-                    else:
-                        logger.warning(
-                            f"批次 {batch_idx}/{total_batches}: JSON解析失败，跳过"
                         )
                 except Exception as e:
                     logger.error(f"批次 {batch_idx}/{total_batches}: LLM调用失败: {e}")
