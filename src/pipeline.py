@@ -78,15 +78,15 @@ class IngestPipeline:
         self.extractor = EntityExtractor()
         self.emb_engine = EmbeddingEngine()
 
-    def ingest_file(self, file_path: str, tags: list[str] | None = None) -> dict:
+    def ingest_file(self, file_path: str, tags: list[str] | None = None, force: bool = False) -> dict:
         """单文件入库（完整流程）"""
         doc = self.loader.load_file(file_path)
-        return self._ingest_doc(doc, tags)
+        return self._ingest_doc(doc, tags, force=force)
 
-    def ingest_url(self, url: str, tags: list[str] | None = None) -> dict:
+    def ingest_url(self, url: str, tags: list[str] | None = None, force: bool = False) -> dict:
         """URL入库"""
         doc = self.loader.load_url(url)
-        return self._ingest_doc(doc, tags)
+        return self._ingest_doc(doc, tags, force=force)
 
     def ingest_directory(self, dir_path: str, recursive: bool = True) -> list[dict]:
         """批量目录入库"""
@@ -101,8 +101,16 @@ class IngestPipeline:
                 results.append({"doc_id": doc["doc_id"], "status": "error", "error": str(e)})
         return results
 
-    def ingest_wechat_url(self, url: str, tags: list[str] | None = None) -> dict:
+    def ingest_wechat_url(self, url: str, tags: list[str] | None = None, force: bool = False) -> dict:
         """微信公众号文章一键入库"""
+        doc_id = generate_wechat_doc_id(url)
+
+        # --force: 先删除旧数据
+        if force and self.kg.document_exists(doc_id):
+            logger.info(f"[force] 删除旧文档: {doc_id}")
+            self.delete_document(doc_id)
+            print(f"🔄 [force] 已删除旧文档: {doc_id}")
+
         venv_python = os.path.expanduser(
             "~/.openclaw/skills/scrapling-article-fetch/venv/bin/python"
         )
@@ -112,7 +120,7 @@ class IngestPipeline:
 
         if not os.path.isfile(venv_python) or not os.path.isfile(script):
             logger.warning("scrapling工具未安装，使用通用URL加载")
-            return self.ingest_url(url, tags=tags)
+            return self.ingest_url(url, tags=tags, force=force)
 
         try:
             # scrapling_fetch.py 直接输出markdown到stdout
@@ -123,7 +131,7 @@ class IngestPipeline:
             md_content = result.stdout
             if not md_content or len(md_content) < 100:
                 raise ValueError(f"scrapling返回内容太短: {len(md_content) if md_content else 0} bytes")
-            # 从markdown提取标题（改进版：前20行 + 正则fallback + URL fallback）
+            # 从markdown提取标题（改进版：前20行 + 正则fallback + HTML fallback + URL fallback）
             title = "Unknown"
             # 1. 检查前20行，匹配 # 和 ## 开头的行
             for line in md_content.split("\n")[:20]:
@@ -142,10 +150,41 @@ class IngestPipeline:
                     if m and len(m.group(1).strip()) > 2:
                         title = m.group(1).strip()
                         break
-            # 3. URL fallback：从URL最后一部分或域名提取
+            # 3. HTML fallback：从页面元数据获取标题（og:title > title > msg_title）
             if title == "Unknown":
                 try:
-                    from urllib.parse import urlparse
+                    import urllib.request
+                    req = urllib.request.Request(
+                        url,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        html = resp.read(131072).decode("utf-8", errors="ignore")
+                    # 优先级：og:title > <title> > msg_title
+                    html_title = None
+                    m_og = re.search(r'og:title.*?content="([^"]+)"', html, re.IGNORECASE)
+                    if m_og and len(m_og.group(1).strip()) > 2:
+                        html_title = m_og.group(1).strip()
+                    if not html_title:
+                        m_title = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+                        if m_title and len(m_title.group(1).strip()) > 2:
+                            html_title = m_title.group(1).strip()
+                    if not html_title:
+                        m_msg = re.search(r'var\s+msg_title\s*=\s*["\x27]([^"\x27]+)["\x27]', html)
+                        if m_msg and len(m_msg.group(1).strip()) > 2:
+                            html_title = m_msg.group(1).strip()
+                    if html_title:
+                        # 清理微信标题后缀
+                        for sep in [" - ", " – ", " — ", "_"]:
+                            if sep in html_title:
+                                html_title = html_title.split(sep)[0]
+                        if len(html_title) > 2:
+                            title = html_title
+                except Exception as e:
+                    logger.warning(f"HTML标题提取失败: {e}")
+            # 4. URL fallback：从URL最后一部分或域名提取（最后手段，通常说明爬取失败）
+            if title == "Unknown":
+                try:
                     parsed = urlparse(url)
                     path_parts = [p for p in parsed.path.strip("/").split("/") if p]
                     if path_parts:
@@ -156,7 +195,29 @@ class IngestPipeline:
                     title = "Unknown"
         except Exception as e:
             logger.error(f"scrapling爬取失败: {e}，回退到通用加载")
-            return self.ingest_url(url, tags=tags)
+            return self.ingest_url(url, tags=tags, force=force)
+
+        # ===== 爬取结果验证 =====
+        # 检查title是否是URL参数（说明爬取失败）
+        parsed_url = urlparse(url)
+        url_path_hash = parsed_url.path.strip("/").split("/")[-1] if parsed_url.path else ""
+        title_is_url_garbage = (
+            title.replace(" ", "") == url_path_hash.replace("-", "")
+            or title == "Unknown"
+        )
+        content_too_short = len(md_content.strip()) < 200
+
+        if title_is_url_garbage or content_too_short:
+            logger.error(
+                f"scrapling爬取结果无效: title={title!r}, "
+                f"content_len={len(md_content)}, "
+                f"title_is_url_garbage={title_is_url_garbage}"
+            )
+            return {
+                "doc_id": doc_id,
+                "status": "error",
+                "error": f"crawl_invalid: title={title!r}, content_len={len(md_content)}",
+            }
 
         # Step 3: 保存MD文件到docs目录
         # 清理md_content中的图片标签噪音
@@ -201,9 +262,14 @@ class IngestPipeline:
             tags=tags,
         )
 
-    def _ingest_doc(self, doc: dict, tags: list[str] | None = None) -> dict:
-        """内部入库逻辑（v2.0完整流程）"""
+    def _ingest_doc(self, doc: dict, tags: list[str] | None = None, force: bool = False) -> dict:
+        """内部入库逻辑（v2.0完整流程，带force和原子性）"""
         doc_id = doc["doc_id"]
+
+        # --force: 先删除旧数据
+        if force and self.kg.document_exists(doc_id):
+            logger.info(f"[force] 删除旧文档: {doc_id}")
+            self.delete_document(doc_id)
 
         # 去重检查
         if self.kg.document_exists(doc_id):
@@ -219,93 +285,106 @@ class IngestPipeline:
         if not chunks:
             return {"doc_id": doc_id, "status": "error", "error": "no_chunks"}
 
-        # Step 2: 向量化并存入ChromaDB
-        self.vector_store.add_chunks(chunks)
+        # === Steps 2-9: 带原子性的入库流程 ===
+        # 如果中间步骤失败，尝试回滚已写入的数据
+        try:
+            # Step 2: 向量化并存入ChromaDB
+            self.vector_store.add_chunks(chunks)
 
-        # Step 3: LLM提取实体、概念、锚关键词
-        summary = doc["content"][:3000]
-        extracted = self.extractor.extract(summary)
-        entities = extracted.get("entities", [])
-        concepts = extracted.get("concepts", [])
-        anchor_keywords = extracted.get("anchor_keywords", [])
+            # Step 3: LLM提取实体、概念、锚关键词
+            summary = doc["content"][:3000]
+            extracted = self.extractor.extract(summary)
+            entities = extracted.get("entities", [])
+            concepts = extracted.get("concepts", [])
+            anchor_keywords = extracted.get("anchor_keywords", [])
 
-        # Step 4: 创建文档节点
-        now = datetime.utcnow().isoformat()
-        self.kg.create_document({
-            "doc_id": doc_id,
-            "title": doc["title"],
-            "source": doc["source"],
-            "doc_type": doc["doc_type"],
-            "summary": extracted.get("summary", doc["content"][:200]),
-            "created_at": now,
-            "updated_at": now,
-            "chunk_count": len(chunks),
-            "metadata": str(doc.get("metadata", {})),
-        })
+            # Step 4: 创建文档节点
+            now = datetime.utcnow().isoformat()
+            self.kg.create_document({
+                "doc_id": doc_id,
+                "title": doc["title"],
+                "source": doc["source"],
+                "doc_type": doc["doc_type"],
+                "summary": extracted.get("summary", doc["content"][:200]),
+                "created_at": now,
+                "updated_at": now,
+                "chunk_count": len(chunks),
+                "metadata": str(doc.get("metadata", {})),
+            })
 
-        # Step 5: 自动分类到学科领域
-        domains = self.kg.classify_document(doc["title"], doc["content"], doc_id)
-        self.kg.link_document_to_domain(doc_id, domains)
+            # Step 5: 自动分类到学科领域
+            domains = self.kg.classify_document(doc["title"], doc["content"], doc_id)
+            self.kg.link_document_to_domain(doc_id, domains)
 
-        # Step 6: 创建实体和概念节点
-        if entities:
-            self.kg.create_entities(entities, doc_id)
-        if concepts:
-            self.kg.create_concepts(concepts, doc_id)
+            # Step 6: 创建实体和概念节点
+            if entities:
+                self.kg.create_entities(entities, doc_id)
+            if concepts:
+                self.kg.create_concepts(concepts, doc_id)
 
-        relations = extracted.get("relations", [])
-        if relations:
-            self.kg.create_relations(relations)
-        doc_tags = tags or extracted.get("tags", [])
-        if doc_tags:
-            self.kg.add_tags(doc_tags, doc_id)
+            relations = extracted.get("relations", [])
+            if relations:
+                self.kg.create_relations(relations)
+            doc_tags = tags or extracted.get("tags", [])
+            if doc_tags:
+                self.kg.add_tags(doc_tags, doc_id)
 
-        # Step 7: 创建Chunk节点 + 锚关键词节点（核心！）
-        all_anchor_keywords = []
-        for chunk in chunks:
-            # 创建Chunk节点
-            self.kg.create_chunk_node(chunk)
-            # 如果全文档级别的锚关键词不够，按chunk补充
-            if not anchor_keywords:
-                chunk_anchors = self.extractor.extract_anchor_keywords_only(
-                    chunk["content"], doc["title"]
-                )
-            else:
-                chunk_anchors = anchor_keywords
-            # 创建锚关键词节点
-            self.kg.create_anchor_keywords(chunk_anchors, chunk["chunk_id"], doc_id)
-
-            # 记录关键词演化事件
-            for kw in chunk_anchors:
-                try:
-                    self.kg.record_keyword_evolution(
-                        keyword=kw.get("keyword", ""),
-                        doc_id=doc_id,
-                        chunk_id=chunk["chunk_id"],
-                        action="appeared",
+            # Step 7: 创建Chunk节点 + 锚关键词节点（核心！）
+            all_anchor_keywords = []
+            for chunk in chunks:
+                # 创建Chunk节点
+                self.kg.create_chunk_node(chunk)
+                # 如果全文档级别的锚关键词不够，按chunk补充
+                if not anchor_keywords:
+                    chunk_anchors = self.extractor.extract_anchor_keywords_only(
+                        chunk["content"], doc["title"]
                     )
-                except Exception as e:
-                    logger.warning(f"记录关键词演化事件失败: {e}")
+                else:
+                    chunk_anchors = anchor_keywords
+                # 创建锚关键词节点
+                self.kg.create_anchor_keywords(chunk_anchors, chunk["chunk_id"], doc_id)
 
-            all_anchor_keywords.extend(chunk_anchors)
+                # 记录关键词演化事件
+                for kw in chunk_anchors:
+                    try:
+                        self.kg.record_keyword_evolution(
+                            keyword=kw.get("keyword", ""),
+                            doc_id=doc_id,
+                            chunk_id=chunk["chunk_id"],
+                            action="appeared",
+                        )
+                    except Exception as e:
+                        logger.warning(f"记录关键词演化事件失败: {e}")
 
-        # Step 8: 计算锚关键词embedding + 相似度建边
-        seen = set()
-        unique_anchors = []
-        for ak in all_anchor_keywords:
-            if ak["keyword"] not in seen:
-                seen.add(ak["keyword"])
-                unique_anchors.append(ak)
+                all_anchor_keywords.extend(chunk_anchors)
 
-        if unique_anchors:
-            kw_texts = [ak["keyword"] for ak in unique_anchors]
-            embeddings = self.emb_engine.embed_texts(kw_texts)
-            for ak, emb in zip(unique_anchors, embeddings):
-                self.kg.update_anchor_embeddings(ak["keyword"], emb)
-            self.kg.build_anchor_similarity_edges(threshold=0.5)
+            # Step 8: 计算锚关键词embedding + 相似度建边
+            seen = set()
+            unique_anchors = []
+            for ak in all_anchor_keywords:
+                if ak["keyword"] not in seen:
+                    seen.add(ak["keyword"])
+                    unique_anchors.append(ak)
 
-        # Step 9: 发现跨领域关联
-        self.kg.discover_cross_domain_links()
+            if unique_anchors:
+                kw_texts = [ak["keyword"] for ak in unique_anchors]
+                embeddings = self.emb_engine.embed_texts(kw_texts)
+                for ak, emb in zip(unique_anchors, embeddings):
+                    self.kg.update_anchor_embeddings(ak["keyword"], emb)
+                self.kg.build_anchor_similarity_edges(threshold=0.5)
+
+            # Step 9: 发现跨领域关联
+            self.kg.discover_cross_domain_links()
+
+        except Exception as e:
+            # 入库失败，尝试回滚已写入的数据
+            logger.error(f"入库过程中失败，尝试回滚 {doc_id}: {e}")
+            try:
+                self.delete_document(doc_id)
+                logger.info(f"回滚成功: 已删除 {doc_id} 的所有数据")
+            except Exception as rollback_err:
+                logger.error(f"回滚失败! 需要手动清理 {doc_id}: {rollback_err}")
+            return {"doc_id": doc_id, "status": "error", "error": str(e)}
 
         logger.info(
             f"✅ 入库完成: {doc_id} | chunks: {len(chunks)} | "

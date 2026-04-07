@@ -28,22 +28,24 @@ def cmd_ingest(args):
     pipeline = IngestPipeline()
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
 
+    force = getattr(args, 'force', False)
+
     if args.file:
         if not os.path.isfile(args.file):
             print(f"❌ 文件不存在: {args.file}")
             sys.exit(1)
         print(f"📥 入库文件: {args.file}")
-        result = pipeline.ingest_file(args.file, tags=tags)
+        result = pipeline.ingest_file(args.file, tags=tags, force=force)
         _print_ingest_result(result)
 
     elif args.url:
         print(f"📥 入库URL: {args.url}")
-        result = pipeline.ingest_url(args.url, tags=tags)
+        result = pipeline.ingest_url(args.url, tags=tags, force=force)
         _print_ingest_result(result)
 
     elif args.wechat_url:
         print(f"📥 入库微信文章: {args.wechat_url}")
-        result = pipeline.ingest_wechat_url(args.wechat_url, tags=tags)
+        result = pipeline.ingest_wechat_url(args.wechat_url, tags=tags, force=force)
         _print_ingest_result(result)
 
     elif args.dir:
@@ -315,6 +317,7 @@ def main():
     ingest_group.add_argument("--wechat-url", "-w", help="微信公众号文章URL")
     ingest_group.add_argument("--dir", "-d", help="批量入库目录")
     ingest_parser.add_argument("--tags", "-t", help='自定义标签，逗号分隔 (如 "AI,工具")')
+    ingest_parser.add_argument("--force", action="store_true", help="强制重新入库（删除旧数据后重新爬取）")
     ingest_parser.set_defaults(func=cmd_ingest)
 
     # ---- search ----
