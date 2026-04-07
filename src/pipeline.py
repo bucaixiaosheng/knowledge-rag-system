@@ -331,8 +331,17 @@ class IngestPipeline:
 
             # Step 7: 创建Chunk节点 + 锚关键词节点（核心！）
             # 如果全文档级别的锚关键词不够，批量提取一次（替代逐chunk调用）
+            # 带重试机制：LLM内容过滤可能间歇性失败，最多重试2次
             if not anchor_keywords:
-                batch_anchors = self.extractor.extract_anchor_keywords_batch(chunks, doc["title"])
+                max_retries = 2
+                for attempt in range(1, max_retries + 1):
+                    batch_anchors = self.extractor.extract_anchor_keywords_batch(chunks, doc["title"])
+                    if batch_anchors:
+                        break
+                    if attempt < max_retries:
+                        logger.warning(f"批量锚关键词提取返回空结果，第{attempt}次重试...")
+                    else:
+                        logger.warning(f"批量锚关键词提取{max_retries}次尝试均返回空结果")
             else:
                 batch_anchors = anchor_keywords
 
