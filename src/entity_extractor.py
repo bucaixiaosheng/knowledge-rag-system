@@ -341,11 +341,67 @@ class EntityExtractor:
             logger.info(
                 f"分批提取完成: 合并前 {len(all_results)} 个 → 去重后 {len(result)} 个锚关键词"
             )
+
+            # === 终极 fallback: LLM完全失败时，用正则从文本提取关键词 ===
+            if not result:
+                logger.warning("LLM多次尝试均未返回有效关键词，启用正则fallback")
+                all_text = "\n".join(c.get("content", "") for batch in batches for c in batch)
+                result = self._regex_extract_keywords(all_text)
+                logger.info(f"正则fallback提取到 {len(result)} 个关键词")
+
             return result
 
         except Exception as e:
             logger.error(f"分批锚关键词提取失败: {e}")
             return []
+
+    def _regex_extract_keywords(self, text: str) -> list[dict]:
+        """正则fallback：当LLM完全失败时，从文本中用规则提取关键词。
+
+        策略：
+        1. 提取「」『』包覆的专有名词（微信文章常见格式）
+        2. 提取全大写/驼峰式技术术语（如 FFmpeg, React, CLIP）
+        3. 提取中英文混合产品名（如 HunyuanVideo, MoneyPrinterTurbo）
+
+        Args:
+            text: 文档全文
+
+        Returns:
+            list[dict]: [{"keyword": "xxx", "importance": 0.7}]
+        """
+        keywords: dict[str, float] = {}
+
+        # 策略1: 「」『』包裹的专有名词
+        for m in re.finditer(r'[「『]([^」』]+?)[」』]', text):
+            kw = m.group(1).strip()
+            if 2 <= len(kw) <= 40:
+                keywords.setdefault(kw, 0.9)
+
+        # 策略2: 大写字母开头的英文技术术语（连续2+大写字母或驼峰式）
+        for m in re.finditer(r'\b([A-Z][a-z]+[A-Z][A-Za-z]*(?:\s[A-Z][A-Za-z]+)*)\b', text):
+            kw = m.group(1).strip()
+            if 3 <= len(kw) <= 40:
+                keywords.setdefault(kw, 0.8)
+
+        # 策略3: 全大写缩写（3-15字符）
+        for m in re.finditer(r'\b([A-Z]{2,15})\b', text):
+            kw = m.group(1)
+            if kw not in ('HTTP', 'HTML', 'URL', 'API', 'SDK', 'TTS', 'LLM', 'AI'):
+                # 常见缩写不给高权重，但保留
+                keywords.setdefault(kw, 0.6)
+            else:
+                keywords.setdefault(kw, 0.7)
+
+        # 策略4: 「」内的英文+数字组合（如版本号 HunyuanVideo 1.5）
+        for m in re.finditer(r'[「『]([A-Za-z]+[\s]+\d+(?:\.\d+)*)[」』]', text):
+            kw = m.group(1).strip()
+            if 3 <= len(kw) <= 40:
+                keywords.setdefault(kw, 0.85)
+
+        result = [{"keyword": k, "importance": v} for k, v in keywords.items()]
+        # 最多返回25个
+        result.sort(key=lambda x: x["importance"], reverse=True)
+        return result[:25]
 
     def extract_anchor_keywords_only(self, content: str, doc_title: str) -> list[dict]:
         """

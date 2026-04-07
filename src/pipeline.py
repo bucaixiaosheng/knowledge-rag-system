@@ -120,6 +120,19 @@ class IngestPipeline:
             logger.debug(f"标题验证失败: 口语化开头且偏长 - {title!r}")
             return False
 
+        # 检查5: section header模式（如 "一、" "二、" "1." "01." "（一）" 等）
+        # 这类标题是文章正文的章节标题，不是文章标题
+        section_patterns = [
+            r'^[一二三四五六七八九十百]+、',       # 一、二、三、...
+            r'^\d+[.、．]\s*',                   # 1. 2. 3、...
+            r'^\d{2}\s',                         # 01 02 03 ...
+            r'^[（(][一二三四五六七八九十]+[）)]',   # （一）（二）...
+        ]
+        for pat in section_patterns:
+            if re.match(pat, title):
+                logger.debug(f"标题验证失败: section header模式 - {title!r}")
+                return False
+
         return True
 
     def ingest_file(self, file_path: str, tags: list[str] | None = None, force: bool = False) -> dict:
